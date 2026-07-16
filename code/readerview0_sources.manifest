@@ -1,0 +1,7 @@
+readerview0_source_manifest 1
+api_header=readerview0_version.h
+public_umbrella=readerview0.h
+unity_source=readerview0.c
+source=reader_view/reader_view.c
+external_include=ui0/code
+external_source=ui0/code/ui0.c
