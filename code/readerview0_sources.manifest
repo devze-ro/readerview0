@@ -3,5 +3,7 @@ api_header=readerview0_version.h
 public_umbrella=readerview0.h
 unity_source=readerview0.c
 source=reader_view/reader_view.c
+diagnostic_source=reader_view/reader_view_debug.c
+diagnostic_header=reader_view/reader_view_debug.h
 external_include=ui0/code
 external_source=ui0/code/ui0.c

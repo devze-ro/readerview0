@@ -10,7 +10,9 @@ $Required = @(
   "code\readerview0.c",
   "code\readerview0_sources.manifest",
   "code\reader_view\reader_view.h",
-  "code\reader_view\reader_view.c"
+  "code\reader_view\reader_view.c",
+  "code\reader_view\reader_view_debug.h",
+  "code\reader_view\reader_view_debug.c"
 )
 foreach ($relative in $Required) {
   if (!(Test-Path -LiteralPath (Join-Path $RepoRoot $relative) -PathType Leaf)) {
@@ -23,6 +25,8 @@ if (Test-Path -LiteralPath $Unity) {
   $UnityText = [System.IO.File]::ReadAllText($Unity)
   $Count = ([regex]::Matches($UnityText, 'reader_view/reader_view\.c')).Count
   if ($Count -ne 1) { $Failures.Add("readerview0.c must include reader_view.c exactly once") }
+  $DebugCount = ([regex]::Matches($UnityText, 'reader_view/reader_view_debug\.c')).Count
+  if ($DebugCount -ne 1) { $Failures.Add("readerview0.c must include reader_view_debug.c exactly once") }
   if ($UnityText -match 'ui0\.c') { $Failures.Add("readerview0.c must not embed UI0") }
 }
 
@@ -37,7 +41,7 @@ if (Test-Path -LiteralPath $Header) {
 $Manifest = Join-Path $Code "readerview0_sources.manifest"
 if (Test-Path -LiteralPath $Manifest) {
   $ManifestText = [System.IO.File]::ReadAllText($Manifest)
-  foreach ($requiredText in @("source=reader_view/reader_view.c", "external_source=ui0/code/ui0.c")) {
+  foreach ($requiredText in @("source=reader_view/reader_view.c", "diagnostic_source=reader_view/reader_view_debug.c", "external_source=ui0/code/ui0.c")) {
     if (!$ManifestText.Contains($requiredText)) { $Failures.Add("source manifest missing: $requiredText") }
   }
 }

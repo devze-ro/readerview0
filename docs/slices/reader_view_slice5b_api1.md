@@ -128,6 +128,28 @@ persistence, callback, vtable, event-bus, and DI dependencies.
 No readerview0 GitHub repository or re10 remote dependency is authorized by
 this slice.
 
+## Stage 2B-0 deterministic parity evidence
+
+The local package also supplies `reader_view_debug.h/.c` as diagnostic-only
+source support. It is intentionally absent from the public umbrella and does
+not change API 1 behavior, ownership, capacities, or dependency direction.
+Two hosts can pass their caller-owned projection, frame storage, and completed
+frame to obtain normalized projection, layout, control, draw, semantic, and
+action hashes plus exact record counts.
+
+Normalization excludes opaque host keys, generated UI IDs, absolute reader
+client origins, and frame indices. It retains visible text, status and
+capability projections, relative geometry, control state, resolved colors and
+typography, semantic hierarchy/ranges, and action meaning. This makes a
+cross-host mismatch actionable without mistaking different persistent IDs or
+an outer-shell offset for a reader-chrome difference.
+
+The deterministic package tests prove that opaque-key and client-origin
+changes leave the snapshot unchanged while a visible toolbar-label change
+updates the affected projection/control/draw/semantic evidence. This support exists
+only to establish the Stage 2B parity baseline; future public theme or content
+geometry contracts require the normal API-revision process.
+
 ## Reconciled re10 source closure
 
 After lectern0 adoption, re10's parallel editor work advanced its exact

@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "readerview0.h"
+#include "reader_view/reader_view_debug.h"
 
 static int failures;
 
@@ -245,6 +246,10 @@ main(void)
   const ReaderViewSemanticNode *node;
   const ReaderViewAction *action;
   UI0U64 first_hash;
+  ReaderViewDebugSnapshot debug_first;
+  ReaderViewDebugSnapshot debug_repeat;
+  ReaderViewDebugSnapshot debug_shifted;
+  ReaderViewDebugSnapshot debug_changed;
 
   reader_view_state_init(&state);
   memset(&layout_input, 0, sizeof(layout_input));
@@ -294,6 +299,79 @@ main(void)
   check(frame.draw_command_count > 0, "full draw records");
   check(frame.semantic_node_count > 10, "full semantic records");
   first_hash = frame_contract_hash(&frame);
+  check(reader_view_debug_snapshot(&projection, &storage, &frame,
+                                   &debug_first),
+        "debug snapshot builds");
+  check(debug_first.projection_hash != 0 && debug_first.layout_hash != 0 &&
+        debug_first.control_hash != 0 && debug_first.draw_hash != 0 &&
+        debug_first.semantic_hash != 0 && debug_first.action_hash != 0,
+        "debug hashes are nonzero");
+
+  toc_rows[1].key = 999;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "opaque-key normalization rebuild");
+  check(reader_view_debug_snapshot(&projection, &storage, &frame,
+                                   &debug_repeat),
+        "opaque-key normalization snapshot");
+  check(memcmp(&debug_first, &debug_repeat, sizeof(debug_first)) == 0,
+        "opaque keys excluded from normalized snapshot");
+  toc_rows[1].key = 21;
+
+  projection.labels.open.data = "Open EPUB";
+  projection.labels.open.size = 9;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "visible-change rebuild");
+  check(reader_view_debug_snapshot(&projection, &storage, &frame,
+                                   &debug_changed),
+        "visible-change snapshot");
+  check(debug_changed.projection_hash != debug_first.projection_hash &&
+        debug_changed.control_hash != debug_first.control_hash &&
+        debug_changed.draw_hash != debug_first.draw_hash &&
+        debug_changed.semantic_hash != debug_first.semantic_hash,
+        "visible text changes normalized evidence");
+  projection.labels.open.data = 0;
+  projection.labels.open.size = 0;
+
+  layout_input.bounds = ui0_rect(17, 23, 1280, 800);
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "shifted-origin layout resolves");
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "shifted-origin rebuild");
+  check(reader_view_debug_snapshot(&projection, &storage, &frame,
+                                   &debug_shifted),
+        "shifted-origin snapshot");
+  if (memcmp(&debug_first, &debug_shifted, sizeof(debug_first)) != 0)
+  {
+    fprintf(stderr,
+            "debug origin mismatch projection=%016llx/%016llx layout=%016llx/%016llx control=%016llx/%016llx draw=%016llx/%016llx semantic=%016llx/%016llx action=%016llx/%016llx counts=%d,%d,%d,%d/%d,%d,%d,%d\n",
+            (unsigned long long)debug_first.projection_hash,
+            (unsigned long long)debug_shifted.projection_hash,
+            (unsigned long long)debug_first.layout_hash,
+            (unsigned long long)debug_shifted.layout_hash,
+            (unsigned long long)debug_first.control_hash,
+            (unsigned long long)debug_shifted.control_hash,
+            (unsigned long long)debug_first.draw_hash,
+            (unsigned long long)debug_shifted.draw_hash,
+            (unsigned long long)debug_first.semantic_hash,
+            (unsigned long long)debug_shifted.semantic_hash,
+            (unsigned long long)debug_first.action_hash,
+            (unsigned long long)debug_shifted.action_hash,
+            debug_first.control_record_count, debug_first.draw_command_count,
+            debug_first.semantic_node_count, debug_first.action_count,
+            debug_shifted.control_record_count, debug_shifted.draw_command_count,
+            debug_shifted.semantic_node_count, debug_shifted.action_count);
+  }
+  check(memcmp(&debug_first, &debug_shifted, sizeof(debug_first)) == 0,
+        "absolute client origin excluded from normalized snapshot");
+  layout_input.bounds = ui0_rect(0, 0, 1280, 800);
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "full layout restored after debug checks");
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "full frame restored after debug checks");
 
   node = find_semantic(&frame, "Contents");
   check(node != 0, "contents semantic present");
