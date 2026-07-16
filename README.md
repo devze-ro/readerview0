@@ -26,7 +26,7 @@ build\win32_build.bat
 The package exact-pins UI0 API 89 at commit
 `f8de965c193a6278d330193c34948bfec09e592b`. The source-consumed UI0 closure
 requires zero_foundation commit
-`a87938edcd16c6c09c8d423a42b6d86122d85a73`.
+`eee57edc1b0c7af5bef7afca26f3c27a32fb6e7c`.
 
 No remote is configured. Do not create or push a GitHub repository without
 explicit authorization.

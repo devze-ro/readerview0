@@ -127,3 +127,14 @@ persistence, callback, vtable, event-bus, and DI dependencies.
 
 No readerview0 GitHub repository or re10 remote dependency is authorized by
 this slice.
+
+## Reconciled re10 source closure
+
+After lectern0 adoption, re10's parallel editor work advanced its exact
+zero_foundation snapshot to
+`eee57edc1b0c7af5bef7afca26f3c27a32fb6e7c` without changing UI0 API 89 or the
+readerview0 manifest. API 1 was rebuilt from scratch against that revision with
+the same UI0 commit, strict C11 `/W4 /WX`, deterministic tests, and architecture
+audit. Only the compatibility metadata and documentation changed; the public
+API, implementation, capacities, dependency direction, and ownership remain
+identical to `f59c9d59e0cc128327812ad1a20edeadfd828d58`.
