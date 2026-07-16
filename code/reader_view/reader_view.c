@@ -1118,6 +1118,24 @@ rv_copy_note_to_state(ReaderViewState *state,
   ui0_text_input_history_reset(&state->note_history);
 }
 
+UI0B32
+reader_view_open_note_editor(ReaderViewState *state,
+                             const ReaderViewSelectionProjection *selection)
+{
+  if (!state || !selection ||
+      (selection->flags & ReaderViewSelection_Active) == 0 ||
+      selection->selection_key == 0 ||
+      (selection->flags & (ReaderViewSelection_CanAddNote |
+                           ReaderViewSelection_CanEditNote)) == 0 ||
+      !rv_text_valid(selection->note_text) ||
+      selection->note_text.size >= READER_VIEW_NOTE_DRAFT_CAP)
+    return 0;
+  rv_copy_note_to_state(state, selection);
+  state->popup = ReaderViewPopup_NoteEditor;
+  state->restore_focus_id = state->focus_id;
+  return 1;
+}
+
 static void
 rv_open_note_editor(RVBuildContext *ctx)
 {
@@ -2459,6 +2477,63 @@ rv_build_note_editor(RVBuildContext *ctx,
 }
 
 static void
+rv_apply_semantic_focus_navigation(RVBuildContext *ctx)
+{
+  const ReaderViewInput *input;
+  ReaderViewSemanticNode *nodes;
+  UI0S32 current = -1;
+  UI0S32 target = -1;
+  UI0S32 direction;
+  if (!ctx || !ctx->input || !ctx->input->input) return;
+  input = ctx->input->input;
+  if (input->move_vertical_delta == 0 &&
+      input->range_move == ReaderViewRangeMove_None)
+    return;
+  nodes = ctx->storage->semantic_nodes;
+  for (UI0S32 index = 0; index < ctx->semantic_count; index += 1)
+  {
+    if (nodes[index].id == ctx->signals.focus_id)
+    {
+      current = index;
+      break;
+    }
+  }
+  if (current < 0 ||
+      (nodes[current].role != ReaderViewSemantic_ListItem &&
+       nodes[current].role != ReaderViewSemantic_MenuItem &&
+       nodes[current].role != ReaderViewSemantic_Tab))
+    return;
+
+  direction = input->move_vertical_delta < 0 ? -1 : 1;
+  if (input->range_move == ReaderViewRangeMove_First) direction = 1;
+  if (input->range_move == ReaderViewRangeMove_Last) direction = -1;
+  UI0S32 start = input->range_move == ReaderViewRangeMove_First ? 0 :
+                 input->range_move == ReaderViewRangeMove_Last ?
+                   ctx->semantic_count - 1 : current + direction;
+  UI0S32 end = direction > 0 ? ctx->semantic_count : -1;
+  for (UI0S32 index = start; index != end; index += direction)
+  {
+    ReaderViewSemanticNode *candidate = nodes + index;
+    if (candidate->parent_id == nodes[current].parent_id &&
+        candidate->role == nodes[current].role &&
+        (candidate->flags & (ReaderViewSemantic_Enabled |
+                             ReaderViewSemantic_Focusable)) ==
+          (ReaderViewSemantic_Enabled | ReaderViewSemantic_Focusable) &&
+        (candidate->flags & ReaderViewSemantic_Offscreen) == 0)
+    {
+      target = index;
+      break;
+    }
+  }
+  if (target < 0 || target == current) return;
+  nodes[current].flags &= ~ReaderViewSemantic_Focused;
+  nodes[target].flags |= ReaderViewSemantic_Focused;
+  ctx->signals.focus_id = nodes[target].id;
+  ctx->signals.focus_visible_id = nodes[target].id;
+  ctx->frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+}
+
+static void
 rv_build_popup(RVBuildContext *ctx,
                ReaderViewPopupKind root_popup,
                UI0Rect popup,
@@ -2609,6 +2684,7 @@ reader_view_build(const ReaderViewBuildInput *input,
   rv_build_left_panel(&ctx, labels);
   rv_build_right_panel(&ctx, labels);
   rv_build_popup(&ctx, root_popup, root_rect, labels);
+  rv_apply_semantic_focus_navigation(&ctx);
 
   ui0_signal_end_frame(&ctx.signals);
   input->state->hot_id = ctx.signals.hot_id;

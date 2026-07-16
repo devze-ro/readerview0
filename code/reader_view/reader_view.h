@@ -704,4 +704,8 @@ UI0B32 reader_view_accessibility_focus(ReaderViewState *state,
 UI0B32 reader_view_accessibility_invoke(ReaderViewState *state,
                                         UI0ID semantic_id);
 
+UI0B32 reader_view_open_note_editor(
+  ReaderViewState *state,
+  const ReaderViewSelectionProjection *selection);
+
 #endif /* READERVIEW0_READER_VIEW_H */

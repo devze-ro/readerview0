@@ -59,6 +59,18 @@ find_semantic(const ReaderViewFrame *frame, const char *name)
   return 0;
 }
 
+static const ReaderViewSemanticNode *
+find_semantic_role(const ReaderViewFrame *frame, const char *name,
+                   ReaderViewSemanticRole role)
+{
+  UI0S32 index;
+  for (index = 0; index < frame->semantic_node_count; ++index)
+    if (frame->semantic_nodes[index].role == role &&
+        text_equal(frame->semantic_nodes[index].name, name))
+      return frame->semantic_nodes + index;
+  return 0;
+}
+
 static const ReaderViewAction *
 find_action(const ReaderViewFrame *frame, ReaderViewActionKind kind)
 {
@@ -303,6 +315,32 @@ main(void)
           "contents opens shared left panel");
   }
 
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "contents panel layout resolves");
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "contents panel build");
+  node = find_semantic_role(&frame, "One", ReaderViewSemantic_ListItem);
+  check(node != 0 && node->role == ReaderViewSemantic_ListItem,
+        "contents first row semantic present");
+  if (node)
+  {
+    check(reader_view_accessibility_focus(&state, node->id),
+          "contents first row focus queued");
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "contents first row focus build");
+    frame_input.move_vertical_delta = 1;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "contents arrow navigation build");
+    node = find_semantic_role(&frame, "Two", ReaderViewSemantic_ListItem);
+    check(node && (node->flags & ReaderViewSemantic_Focused),
+          "contents arrow moves shared focus");
+  }
+
   state.left_panel = ReaderViewLeftPanel_Find;
   check(reader_view_resolve_layout(&state, &layout_input, &layout),
         "find panel layout resolves");
@@ -358,6 +396,25 @@ main(void)
           "focused progress keyboard emits seek action");
   }
 
+  projection.selection.status = ready_status();
+  projection.selection.selection_key = 50;
+  projection.selection.revision = 7;
+  projection.selection.flags = ReaderViewSelection_Active |
+                               ReaderViewSelection_CanEditNote;
+  projection.selection.note_text.data = "Existing note";
+  projection.selection.note_text.size = 13;
+  check(reader_view_open_note_editor(&state, &projection.selection),
+        "host can request shared note editor for authoritative selection");
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "host-requested note editor build");
+  check(state.popup == ReaderViewPopup_NoteEditor &&
+        text_equal(reader_view_note_draft(&state), "Existing note"),
+        "host-requested note editor owns bounded draft state");
+
+  memset(&projection.selection, 0, sizeof(projection.selection));
+  projection.selection.status = ready_status();
   reader_view_state_reset_document(&state, projection.document_key);
   memset(&frame_input, 0, sizeof(frame_input));
   check(reader_view_resolve_layout(&state, &layout_input, &layout),

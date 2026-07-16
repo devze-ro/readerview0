@@ -59,6 +59,12 @@ setting, navigation, note, fullscreen, export, and lookup requests are returned
 as bounded `ReaderViewAction` records. The application executes them and
 publishes the authoritative result on a later frame.
 
+When a host executes `ReaderViewAction_EditRightRowNote`, it resolves and
+publishes the authoritative selection, then calls
+`reader_view_open_note_editor`. The operation copies only the bounded note
+draft and revision into caller-owned transient state; it does not retain the
+projection or mutate the host record.
+
 ## Capability and empty-state rule
 
 Every feature is gated by `ReaderViewFeatureFlags`, document capability flags,
@@ -101,7 +107,9 @@ The deterministic tests cover:
 - bounded Find draft editing and action emission;
 - native-adapter accessibility invocation through the normal action path;
 - native-adapter progress focus and keyboard seeking through the normal action
-  path; and
+  path;
+- arrow navigation among shared list rows plus host-requested direct note
+  editing; and
 - fail-closed duplicate-key validation.
 
 The architecture guard verifies the UI0-only dependency, unity inclusion,
