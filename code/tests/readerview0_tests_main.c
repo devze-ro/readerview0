@@ -336,6 +336,28 @@ main(void)
           "accessibility invoke uses action path");
   }
 
+  node = find_semantic(&frame, "3 of 10");
+  check(node != 0 && node->role == ReaderViewSemantic_Slider,
+        "progress slider semantic present");
+  if (node)
+  {
+    check(reader_view_accessibility_focus(&state, node->id),
+          "progress accessibility focus queued");
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "progress accessibility focus build");
+    node = find_semantic(&frame, "3 of 10");
+    check(node && (node->flags & ReaderViewSemantic_Focused),
+          "progress accessibility focus published");
+    frame_input.move_horizontal_delta = 10;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "progress accessibility keyboard build");
+    action = find_action(&frame, ReaderViewAction_SeekLocation);
+    check(action != 0 && action->value > projection.progress.location_index,
+          "focused progress keyboard emits seek action");
+  }
+
   reader_view_state_reset_document(&state, projection.document_key);
   memset(&frame_input, 0, sizeof(frame_input));
   check(reader_view_resolve_layout(&state, &layout_input, &layout),

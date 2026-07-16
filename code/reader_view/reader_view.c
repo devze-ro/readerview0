@@ -2294,7 +2294,28 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
     spec.min_value = 0;
     spec.max_value = 10000;
     spec.step = 1;
-    spec.keyboard_delta = ctx->input->input->move_horizontal_delta * 100;
+    if (ctx->input->state->pending_accessibility_focus_id == spec.id)
+    {
+      ctx->input->state->pending_accessibility_focus_id = 0;
+      if (projection->progress.can_seek)
+      {
+        ctx->signals.focus_id = spec.id;
+        ctx->signals.focus_visible_id = spec.id;
+        ctx->frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+      }
+    }
+    if (ctx->input->state->pending_accessibility_invoke_id == spec.id)
+    {
+      ctx->input->state->pending_accessibility_invoke_id = 0;
+      if (projection->progress.can_seek)
+      {
+        ctx->signals.focus_id = spec.id;
+        ctx->signals.focus_visible_id = spec.id;
+        ctx->frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+      }
+    }
+    spec.keyboard_delta = ctx->signals.focus_id == spec.id ?
+      ctx->input->input->move_horizontal_delta * 100 : 0;
     if (!projection->progress.can_seek) spec.flags |= UI0Slider_Disabled;
     result = ui0_slider_rect(&ctx->sliders, &ctx->signals, spec);
     (void)rv_add_semantic(ctx, spec.id, 0, ReaderViewSemantic_Slider,

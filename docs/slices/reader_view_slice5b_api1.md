@@ -99,7 +99,9 @@ The deterministic tests cover:
 - the complete feature projection and stable semantic/layout hash;
 - pointer activation of the shared Contents control;
 - bounded Find draft editing and action emission;
-- native-adapter accessibility invocation through the normal action path; and
+- native-adapter accessibility invocation through the normal action path;
+- native-adapter progress focus and keyboard seeking through the normal action
+  path; and
 - fail-closed duplicate-key validation.
 
 The architecture guard verifies the UI0-only dependency, unity inclusion,
