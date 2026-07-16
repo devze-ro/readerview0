@@ -8,6 +8,8 @@ Readerview0 owns only proven-common UI0-composed EPUB reader chrome:
 - left TOC/Find and right annotations/bookmarks panel shells;
 - page gutters, progress geometry, settings and row-action popups, selection
   tools, and the bounded note-editor dialog;
+- allocation-free page-surface and content geometry over a caller-provided
+  central viewport and scalar style;
 - deterministic layout, UI0 draw records, text bindings, and portable semantic
   records;
 - caller-owned, fixed-capacity transient interaction state; and
@@ -37,7 +39,7 @@ theme, or hidden mutable reader state.
 The direction is:
 
 ```text
-application -> readerview0 API 1 -> UI0 API 89
+application -> readerview0 API 2 -> UI0 API 90
 ```
 
 Readerview0 source-consumes no lower implementation. The final application
@@ -61,6 +63,10 @@ that storage and remain valid only until the next build using it. Action text
 may also point into caller-owned state or borrowed projection text and follows
 the shorter lifetime.
 
+`ReaderViewContentGeometryStyle` is copied for one geometry call. The returned
+`ReaderViewContentGeometry` is written into caller storage and contains values
+only; readerview0 retains neither the style nor any rectangle.
+
 No operation allocates, retains host records, calls a host callback, mutates a
 database, or uses process-global mutable state.
 
@@ -72,13 +78,20 @@ semantic roles/states. `reader_view_accessibility_focus` and
 state and action path used by pointer and keyboard input.
 
 Applications own native accessibility objects, platform event translation,
-screen-reader announcements, and action execution. API 1 does not redesign
+screen-reader announcements, and action execution. API 2 does not redesign
 either host's native adapter.
 
 ## Central viewport
 
-`ReaderViewLayout.viewport_rect` is the application rendering contract. The
-package may reserve page gutters and overlay/dock panel geometry, but it never
-draws EPUB content or owns document frames, decoded images, selection geometry,
-or renderer resources. A host recomputes the layout after a frame reports a
-layout-affecting state change.
+`ReaderViewLayout.viewport_rect` is the outer application rendering contract.
+`reader_view_resolve_content_geometry` derives the centered page surface and
+inner content rectangle from that viewport. Its default style publishes the
+re10-reference 24 px horizontal reserve, 660/160 px page widths, 52/68 px
+content insets, and 80/48 px content minima. The operation accepts no document
+state and emits no draw command.
+
+The package may reserve page gutters and overlay/dock panel geometry, but it
+never draws EPUB content or owns document frames, decoded images,
+selection/highlight geometry, or renderer resources. Applications choose
+which UI0 resolved profile colors to use and execute all page painting. A host
+recomputes the layout after a frame reports a layout-affecting state change.

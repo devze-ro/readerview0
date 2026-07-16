@@ -16,6 +16,12 @@ check(int condition, const char *name)
   }
 }
 
+static int
+rect_equal(UI0Rect a, UI0Rect b)
+{
+  return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
+}
+
 static ReaderViewSurfaceStatus
 ready_status(void)
 {
@@ -250,6 +256,114 @@ main(void)
   ReaderViewDebugSnapshot debug_repeat;
   ReaderViewDebugSnapshot debug_shifted;
   ReaderViewDebugSnapshot debug_changed;
+  ReaderViewContentGeometryStyle geometry_style;
+  ReaderViewContentGeometryStyle compact_style;
+  ReaderViewContentGeometry geometry;
+  ReaderViewContentGeometry geometry_repeat;
+
+  check(READERVIEW0_API_VERSION == 2,
+        "public API version");
+  check(READERVIEW0_VERSION_MAJOR == 0 &&
+        READERVIEW0_VERSION_MINOR == 2 &&
+        READERVIEW0_VERSION_PATCH == 0 &&
+        strcmp(READERVIEW0_VERSION_STRING, "0.2.0-dev") == 0,
+        "public package version");
+  check(READERVIEW0_UI0_REQUIRED_API_VERSION == 90 &&
+        UI0_API_VERSION == 90,
+        "exact UI0 API version");
+
+  geometry_style = reader_view_default_content_geometry_style();
+  memset(&geometry, 0, sizeof(geometry));
+  memset(&geometry_repeat, 0, sizeof(geometry_repeat));
+  check(geometry_style.page_horizontal_inset == 24 &&
+        geometry_style.page_max_width == 660 &&
+        geometry_style.page_min_width == 160 &&
+        geometry_style.content_inset_x == 52 &&
+        geometry_style.content_inset_y == 68 &&
+        geometry_style.content_min_width == 80 &&
+        geometry_style.content_min_height == 48,
+        "default content geometry style matches re10 reference scalars");
+  check(reader_view_resolve_content_geometry(
+          ui0_rect(0, 48, 1400, 694), 0, &geometry),
+        "wide reference content geometry resolves");
+  check(rect_equal(geometry.viewport_rect,
+                   ui0_rect(0, 48, 1400, 694)) &&
+        rect_equal(geometry.page_surface_rect,
+                   ui0_rect(370, 48, 660, 694)) &&
+        rect_equal(geometry.content_rect,
+                   ui0_rect(422, 116, 556, 558)),
+        "wide reference content geometry is exact");
+  check(reader_view_resolve_content_geometry(
+          ui0_rect(320, 48, 1080, 694), &geometry_style, &geometry),
+        "docked reference content geometry resolves");
+  check(rect_equal(geometry.page_surface_rect,
+                   ui0_rect(530, 48, 660, 694)) &&
+        rect_equal(geometry.content_rect,
+                   ui0_rect(582, 116, 556, 558)),
+        "docked reference geometry centers inside shared viewport");
+  check(reader_view_resolve_content_geometry(
+          ui0_rect(0, 48, 940, 434), &geometry_style, &geometry),
+        "narrow reference content geometry resolves");
+  check(rect_equal(geometry.page_surface_rect,
+                   ui0_rect(140, 48, 660, 434)) &&
+        rect_equal(geometry.content_rect,
+                   ui0_rect(192, 116, 556, 298)),
+        "narrow reference content geometry is exact");
+  check(reader_view_resolve_content_geometry(
+          ui0_rect(0, 48, 600, 434), &geometry_style, &geometry),
+        "inset-width content geometry resolves");
+  check(rect_equal(geometry.page_surface_rect,
+                   ui0_rect(24, 48, 552, 434)) &&
+        rect_equal(geometry.content_rect,
+                   ui0_rect(76, 116, 448, 298)),
+        "page horizontal reserve is exact below max width");
+  check(reader_view_resolve_content_geometry(
+          ui0_rect(10, 20, 180, 100), &geometry_style, &geometry),
+        "minimum content geometry resolves");
+  check(rect_equal(geometry.page_surface_rect,
+                   ui0_rect(20, 20, 160, 100)) &&
+        rect_equal(geometry.content_rect,
+                   ui0_rect(72, 88, 80, 48)),
+        "minimum page and content bounds are exact");
+
+  compact_style = geometry_style;
+  compact_style.page_horizontal_inset = 10;
+  compact_style.page_max_width = 500;
+  compact_style.page_min_width = 120;
+  compact_style.content_inset_x = 20;
+  compact_style.content_inset_y = 24;
+  compact_style.content_min_width = 60;
+  compact_style.content_min_height = 40;
+  check(reader_view_resolve_content_geometry(
+          ui0_rect(5, 7, 800, 500), &compact_style, &geometry),
+        "explicit content geometry style resolves");
+  check(rect_equal(geometry.page_surface_rect,
+                   ui0_rect(155, 7, 500, 500)) &&
+        rect_equal(geometry.content_rect,
+                   ui0_rect(175, 31, 460, 452)),
+        "explicit content geometry style is honored");
+  check(reader_view_resolve_content_geometry(
+          ui0_rect(5, 7, 800, 500), &compact_style, &geometry_repeat) &&
+        memcmp(&geometry, &geometry_repeat, sizeof(geometry)) == 0,
+        "content geometry is deterministic");
+
+  compact_style.page_min_width = compact_style.page_max_width + 1;
+  geometry.viewport_rect = ui0_rect(1, 2, 3, 4);
+  check(!reader_view_resolve_content_geometry(
+          ui0_rect(5, 7, 800, 500), &compact_style, &geometry) &&
+        rect_equal(geometry.viewport_rect, ui0_rect(0, 0, 0, 0)) &&
+        rect_equal(geometry.page_surface_rect, ui0_rect(0, 0, 0, 0)) &&
+        rect_equal(geometry.content_rect, ui0_rect(0, 0, 0, 0)),
+        "invalid content geometry style fails closed");
+  check(!reader_view_resolve_content_geometry(
+          ui0_rect(0, 0, 0, 100), 0, &geometry) &&
+        !reader_view_resolve_content_geometry(
+          ui0_rect(0, 0, 100, 100), 0, 0),
+        "invalid content geometry arguments fail closed");
+  check(!reader_view_resolve_content_geometry(
+          ui0_rect(INT32_MAX, INT32_MAX, 100, 100), 0, &geometry) &&
+        rect_equal(geometry.viewport_rect, ui0_rect(0, 0, 0, 0)),
+        "overflowing content geometry fails closed");
 
   reader_view_state_init(&state);
   memset(&layout_input, 0, sizeof(layout_input));

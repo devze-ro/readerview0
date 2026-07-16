@@ -128,6 +128,11 @@ persistence, callback, vtable, event-bus, and DI dependencies.
 No readerview0 GitHub repository or re10 remote dependency is authorized by
 this slice.
 
+API 1 is superseded for new consumers by the compatible-feature API 2 follow-up
+recorded in `reader_view_stage2b1_content_geometry_api2.md`. API 2 changes no
+API 1 chrome feature, capacity, state, action, focus, or semantic behavior; it
+adds only page/content geometry and advances the exact UI0 pin.
+
 ## Stage 2B-0 deterministic parity evidence
 
 The local package also supplies `reader_view_debug.h/.c` as diagnostic-only

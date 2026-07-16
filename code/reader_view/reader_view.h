@@ -31,6 +31,13 @@ enum
   READER_VIEW_SCROLL_CAP = 4,
   READER_VIEW_TEXT_BINDING_CAP = 640,
   READER_VIEW_SEMANTIC_NODE_CAP = 384,
+  READER_VIEW_DEFAULT_PAGE_HORIZONTAL_INSET = 24,
+  READER_VIEW_DEFAULT_PAGE_MAX_WIDTH = 660,
+  READER_VIEW_DEFAULT_PAGE_MIN_WIDTH = 160,
+  READER_VIEW_DEFAULT_CONTENT_INSET_X = 52,
+  READER_VIEW_DEFAULT_CONTENT_INSET_Y = 68,
+  READER_VIEW_DEFAULT_CONTENT_MIN_WIDTH = 80,
+  READER_VIEW_DEFAULT_CONTENT_MIN_HEIGHT = 48,
 };
 
 typedef struct ReaderViewText
@@ -484,6 +491,24 @@ typedef struct ReaderViewLayout
   UI0Rect progress_rect;
 } ReaderViewLayout;
 
+typedef struct ReaderViewContentGeometryStyle
+{
+  UI0S32 page_horizontal_inset;
+  UI0S32 page_max_width;
+  UI0S32 page_min_width;
+  UI0S32 content_inset_x;
+  UI0S32 content_inset_y;
+  UI0S32 content_min_width;
+  UI0S32 content_min_height;
+} ReaderViewContentGeometryStyle;
+
+typedef struct ReaderViewContentGeometry
+{
+  UI0Rect viewport_rect;
+  UI0Rect page_surface_rect;
+  UI0Rect content_rect;
+} ReaderViewContentGeometry;
+
 typedef enum ReaderViewRangeMove
 {
   ReaderViewRangeMove_None,
@@ -691,6 +716,15 @@ ReaderViewText reader_view_note_draft(const ReaderViewState *state);
 UI0B32 reader_view_resolve_layout(const ReaderViewState *state,
                                   const ReaderViewLayoutInput *input,
                                   ReaderViewLayout *out_layout);
+ReaderViewContentGeometryStyle reader_view_default_content_geometry_style(void);
+/*
+ * Resolves caller-owned value geometry only. A null style selects the public
+ * defaults. On failure, non-null out_geometry storage is zeroed.
+ */
+UI0B32 reader_view_resolve_content_geometry(
+  UI0Rect viewport_rect,
+  const ReaderViewContentGeometryStyle *style,
+  ReaderViewContentGeometry *out_geometry);
 
 void reader_view_frame_storage_init(ReaderViewFrameStorage *storage);
 

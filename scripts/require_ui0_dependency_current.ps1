@@ -4,6 +4,6 @@ if ($LASTEXITCODE -ne 0) {
   Write-Host "guardrail: readerview0 dependency pin is not current"
   exit $LASTEXITCODE
 }
-Write-Host "guardrail: readerview0 UI0 API 89 dependency is current"
+Write-Host "guardrail: readerview0 UI0 API 90 dependency is current"
 exit 0
 

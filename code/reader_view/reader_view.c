@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdint.h>
 
 enum
 {
@@ -106,6 +107,12 @@ rv_clamp(UI0S32 value, UI0S32 low, UI0S32 high)
   if (value < low) return low;
   if (value > high) return high;
   return value;
+}
+
+static UI0B32
+rv_i64_fits_s32(int64_t value)
+{
+  return value >= INT32_MIN && value <= INT32_MAX;
 }
 
 static UI0Rect
@@ -405,6 +412,102 @@ reader_view_resolve_layout(const ReaderViewState *state,
                                     result.next_gutter_visible ? RV_GUTTER_WIDTH : 0,
                                     result.viewport_rect.h);
   *out_layout = result;
+  return 1;
+}
+
+ReaderViewContentGeometryStyle
+reader_view_default_content_geometry_style(void)
+{
+  ReaderViewContentGeometryStyle result;
+  result.page_horizontal_inset = READER_VIEW_DEFAULT_PAGE_HORIZONTAL_INSET;
+  result.page_max_width = READER_VIEW_DEFAULT_PAGE_MAX_WIDTH;
+  result.page_min_width = READER_VIEW_DEFAULT_PAGE_MIN_WIDTH;
+  result.content_inset_x = READER_VIEW_DEFAULT_CONTENT_INSET_X;
+  result.content_inset_y = READER_VIEW_DEFAULT_CONTENT_INSET_Y;
+  result.content_min_width = READER_VIEW_DEFAULT_CONTENT_MIN_WIDTH;
+  result.content_min_height = READER_VIEW_DEFAULT_CONTENT_MIN_HEIGHT;
+  return result;
+}
+
+UI0B32
+reader_view_resolve_content_geometry(
+  UI0Rect viewport_rect,
+  const ReaderViewContentGeometryStyle *style,
+  ReaderViewContentGeometry *out_geometry)
+{
+  ReaderViewContentGeometry result;
+  ReaderViewContentGeometryStyle resolved_style =
+    style ? *style : reader_view_default_content_geometry_style();
+  int64_t available_width;
+  int64_t page_width;
+  int64_t page_x;
+  int64_t content_x;
+  int64_t content_y;
+  int64_t content_width;
+  int64_t content_height;
+
+  memset(&result, 0, sizeof(result));
+  if (out_geometry)
+  {
+    *out_geometry = result;
+  }
+  if (!out_geometry || viewport_rect.w <= 0 || viewport_rect.h <= 0 ||
+      resolved_style.page_horizontal_inset < 0 ||
+      resolved_style.page_max_width <= 0 ||
+      resolved_style.page_min_width <= 0 ||
+      resolved_style.page_min_width > resolved_style.page_max_width ||
+      resolved_style.content_inset_x < 0 ||
+      resolved_style.content_inset_y < 0 ||
+      resolved_style.content_min_width <= 0 ||
+      resolved_style.content_min_height <= 0)
+  {
+    return 0;
+  }
+
+  available_width = (int64_t)viewport_rect.w -
+    2ll * resolved_style.page_horizontal_inset;
+  page_width = available_width > resolved_style.page_min_width ?
+    available_width : resolved_style.page_min_width;
+  if (page_width > resolved_style.page_max_width)
+  {
+    page_width = resolved_style.page_max_width;
+  }
+  page_x = (int64_t)viewport_rect.x;
+  if ((int64_t)viewport_rect.w > page_width)
+  {
+    page_x += ((int64_t)viewport_rect.w - page_width) / 2;
+  }
+  content_x = page_x + resolved_style.content_inset_x;
+  content_y = (int64_t)viewport_rect.y + resolved_style.content_inset_y;
+  content_width = page_width - 2ll * resolved_style.content_inset_x;
+  if (content_width < resolved_style.content_min_width)
+  {
+    content_width = resolved_style.content_min_width;
+  }
+  content_height = (int64_t)viewport_rect.h -
+    2ll * resolved_style.content_inset_y;
+  if (content_height < resolved_style.content_min_height)
+  {
+    content_height = resolved_style.content_min_height;
+  }
+  if (!rv_i64_fits_s32(page_x) || !rv_i64_fits_s32(page_width) ||
+      !rv_i64_fits_s32(content_x) || !rv_i64_fits_s32(content_y) ||
+      !rv_i64_fits_s32(content_width) || !rv_i64_fits_s32(content_height))
+  {
+    return 0;
+  }
+
+  result.viewport_rect = viewport_rect;
+  result.page_surface_rect = rv_rect((UI0S32)page_x,
+                                     viewport_rect.y,
+                                     (UI0S32)page_width,
+                                     viewport_rect.h);
+  result.content_rect = rv_rect(
+    (UI0S32)content_x,
+    (UI0S32)content_y,
+    (UI0S32)content_width,
+    (UI0S32)content_height);
+  *out_geometry = result;
   return 1;
 }
 
