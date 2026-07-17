@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "readerview0.h"
@@ -523,6 +524,160 @@ test_zero_document_interaction(const UI0ResolvedTheme *theme)
         "explicit document-to-zero reset clears transient state");
 }
 
+static void
+test_progress_u64_scaling(const UI0ResolvedTheme *theme)
+{
+  typedef struct ProgressScaleCase
+  {
+    UI0U64 location_count;
+    UI0U64 location_index;
+    UI0S32 slider_max;
+    UI0S32 slider_value;
+  } ProgressScaleCase;
+  static const ProgressScaleCase cases[] = {
+    { 100ull, 24ull, 100, 25 },
+    { 2147483646ull, 2147483645ull, 2147483646, 2147483646 },
+    { 2147483647ull, 2147483646ull, INT32_MAX, INT32_MAX },
+    { 2147483648ull, 0ull, INT32_MAX, 1 },
+    { 2147483648ull, 1ull, INT32_MAX, 2 },
+    { 2147483648ull, 2147483647ull, INT32_MAX, INT32_MAX },
+    { 2147483649ull, 2147483648ull, INT32_MAX, INT32_MAX },
+    { UINT64_MAX, 8589934600ull, INT32_MAX, 2 },
+    { UINT64_MAX, 9223372036854775807ull, INT32_MAX, 1073741824 },
+    { UINT64_MAX, UINT64_MAX - 1ull, INT32_MAX, INT32_MAX },
+  };
+  static ReaderViewState state;
+  static ReaderViewFrameStorage storage;
+  ReaderViewLayoutInput layout_input;
+  ReaderViewLayout layout;
+  ReaderViewProjection projection = minimal_projection();
+  ReaderViewInput frame_input;
+  ReaderViewBuildInput build_input;
+  ReaderViewFrame frame;
+  const ReaderViewSemanticNode *node;
+  const ReaderViewAction *action;
+  UI0S32 index;
+
+  projection.document_key = 701;
+  projection.features = ReaderViewFeature_Progress;
+  projection.document_flags = ReaderViewDocument_Open;
+  projection.progress.can_seek = 1;
+  projection.progress.page_count = 1;
+  projection.progress.page_index = 0;
+  projection.progress.chapter.data = "Chapter";
+  projection.progress.chapter.size = 7;
+  projection.progress.label.data = "Progress range";
+  projection.progress.label.size = 14;
+
+  reader_view_state_init(&state);
+  memset(&layout_input, 0, sizeof(layout_input));
+  layout_input.bounds = ui0_rect(0, 0, 1400, 780);
+  layout_input.features = projection.features;
+  layout_input.document_flags = projection.document_flags;
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "U64 progress layout resolves");
+
+  memset(&frame_input, 0, sizeof(frame_input));
+  memset(&build_input, 0, sizeof(build_input));
+  build_input.frame_index = 1;
+  build_input.state = &state;
+  build_input.layout = &layout;
+  build_input.projection = &projection;
+  build_input.input = &frame_input;
+  build_input.theme = theme;
+
+  for (index = 0; index < (UI0S32)(sizeof(cases) / sizeof(cases[0])); ++index)
+  {
+    const UI0SliderRecord *slider = storage.slider_records;
+    projection.progress.location_count = cases[index].location_count;
+    projection.progress.location_index = cases[index].location_index;
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "U64 progress scale case builds");
+    node = find_semantic_role(&frame, "Progress range",
+                              ReaderViewSemantic_Slider);
+    check(node != 0 && slider->id == node->id &&
+          slider->min_value == 1 &&
+          slider->max_value == cases[index].slider_max &&
+          slider->value == cases[index].slider_value &&
+          slider->next_value == cases[index].slider_value &&
+          slider->step == 1,
+          "U64 progress scale case has exact bounded slider record");
+    check(node != 0 &&
+          node->range_value == cases[index].location_index &&
+          node->range_min == 0 &&
+          node->range_max == cases[index].location_count - 1ull,
+          "U64 progress scale case preserves full semantic range");
+  }
+
+  projection.progress.location_count = UINT64_MAX;
+  projection.progress.location_index = 0;
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "U64 progress action seed builds");
+  node = find_semantic_role(&frame, "Progress range",
+                            ReaderViewSemantic_Slider);
+  check(node != 0 && reader_view_accessibility_focus(&state, node->id),
+        "U64 progress focus queues");
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "U64 progress focus builds");
+
+  frame_input.move_horizontal_delta = 1;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "U64 progress first scaled step builds");
+  action = find_action(&frame, ReaderViewAction_SeekLocation);
+  check(action != 0 && action->value == 8589934600ull,
+        "U64 progress first scaled step is exact");
+
+  frame_input.move_horizontal_delta = INT32_MAX - 1;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "U64 progress upper endpoint step builds");
+  action = find_action(&frame, ReaderViewAction_SeekLocation);
+  check(action != 0 && action->value == UINT64_MAX - 1ull,
+        "U64 progress upper endpoint is exactly reachable");
+
+  projection.progress.location_index = UINT64_MAX - 1ull;
+  frame_input.move_horizontal_delta = -(INT32_MAX - 1);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "U64 progress lower endpoint step builds");
+  action = find_action(&frame, ReaderViewAction_SeekLocation);
+  check(action != 0 && action->value == 0,
+        "U64 progress lower endpoint is exactly reachable");
+
+  projection.progress.location_index = 9223372036854775807ull;
+  frame_input.move_horizontal_delta = 1;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "U64 progress midpoint next step builds");
+  action = find_action(&frame, ReaderViewAction_SeekLocation);
+  check(action != 0 && action->value == 9223372045444710407ull,
+        "U64 progress midpoint next step uses deterministic rounding");
+
+  frame_input.move_horizontal_delta = -1;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "U64 progress midpoint previous step builds");
+  action = find_action(&frame, ReaderViewAction_SeekLocation);
+  check(action != 0 && action->value == 9223372028264841207ull,
+        "U64 progress midpoint previous step uses deterministic rounding");
+
+  projection.progress.location_count = 2147483648ull;
+  projection.progress.location_index = 0;
+  frame_input.move_horizontal_delta = 1;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "INT32 boundary progress step builds");
+  action = find_action(&frame, ReaderViewAction_SeekLocation);
+  check(action != 0 && action->value == 1,
+        "INT32 boundary progress keeps one-location first step");
+}
+
 int
 main(void)
 {
@@ -572,6 +727,7 @@ main(void)
         "re10 reference chrome geometry constants");
 
   test_zero_document_interaction(&theme);
+  test_progress_u64_scaling(&theme);
 
   geometry_style = reader_view_default_content_geometry_style();
   memset(&geometry, 0, sizeof(geometry));

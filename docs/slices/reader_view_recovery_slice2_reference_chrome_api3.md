@@ -149,6 +149,18 @@ ControlGap spacing token, and Body line height, then published with the muted
 chrome-metadata style. The public progress location remains zero-based even
 though the accepted visual slider position is one-based.
 
+Counts through `INT32_MAX` retain the exact one-to-one visual mapping from
+location `i` to slider value `i + 1`. For a larger count `c`, the bounded UI0
+slider uses `[1, INT32_MAX]` and round-half-up mappings
+`1 + round(i * (INT32_MAX - 1) / (c - 1))` in the forward direction and
+`round((s - 1) * (c - 1) / (INT32_MAX - 1))` for a returned slider value `s`.
+The implementation accumulates quotient/remainder terms without forming an
+overflowing product. Both zero and `c - 1` are exactly reachable, the mapping
+is monotonic, and one pointer or keyboard slider unit advances one deterministic
+scaled bucket. Portable semantics and SeekLocation actions continue to carry
+the full unsigned 64-bit document range. This is an API 3 contract correction,
+not an API expansion.
+
 The Font popup is anchored 6 px below the Font slot. With the accepted theme
 metrics and five projected choices its outer rectangle is
 `(1094,44,170,188)` at 1400 px width, and its first 144 by 32 px body row begins
@@ -184,7 +196,9 @@ Strict MSVC C11 `/W4 /WX` validation covers:
 - portable title identity and geometry without document-title substitution;
 - stable semantic control identities independent of projected labels;
 - gutter visual versus hit geometry and pointer action execution;
-- page-width progress semantics and keyboard action execution;
+- page-width progress semantics and keyboard action execution, including exact
+  one-to-one behavior through `INT32_MAX`, boundary counts immediately above
+  it, monotonic scaled steps, and both endpoints at `UINT64_MAX`;
 - exact Font popup/row geometry and SelectSetting execution;
 - zero-document Open pointer/focus behavior from recovery Slice 1;
 - unchanged panel, Find, note-editor, focus, accessibility, duplicate-key, and

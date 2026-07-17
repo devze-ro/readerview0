@@ -105,3 +105,10 @@ never draws EPUB content or owns document frames, decoded images,
 selection/highlight geometry, or renderer resources. Applications choose
 which UI0 resolved profile colors to use and execute all page painting. A host
 recomputes the layout after a frame reports a layout-affecting state change.
+
+Public progress locations and semantic ranges remain unsigned 64-bit document
+values. Counts through `INT32_MAX` map one-to-one onto UI0's signed 32-bit
+slider; larger counts use a deterministic, allocation-free monotonic scale
+with exact endpoints and overflow-safe round-half-up arithmetic. The bounded
+UI adapter therefore never truncates the range returned in a SeekLocation
+action or advertised to native accessibility adapters.

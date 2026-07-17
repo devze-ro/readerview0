@@ -138,6 +138,106 @@ rv_clamp(UI0S32 value, UI0S32 low, UI0S32 high)
   return value;
 }
 
+/*
+ * Returns round-half-up(value * multiplier / divisor) without forming the
+ * product. The progress adapter calls this with value <= divisor, so every
+ * accumulated quotient is bounded by multiplier even at UINT64_MAX.
+ */
+static UI0U64
+rv_round_mul_div_u64(UI0U64 value, UI0U64 multiplier, UI0U64 divisor)
+{
+  UI0U64 quotient = 0;
+  UI0U64 remainder = 0;
+  UI0U64 add_quotient;
+  UI0U64 add_remainder;
+
+  if (value == 0 || multiplier == 0 || divisor == 0) return 0;
+  if (value > divisor) value = divisor;
+  add_quotient = value / divisor;
+  add_remainder = value % divisor;
+
+  while (multiplier != 0)
+  {
+    if ((multiplier & 1ull) != 0)
+    {
+      quotient += add_quotient;
+      if (add_remainder != 0 &&
+          remainder >= divisor - add_remainder)
+      {
+        remainder -= divisor - add_remainder;
+        quotient += 1;
+      }
+      else
+      {
+        remainder += add_remainder;
+      }
+    }
+
+    multiplier >>= 1;
+    if (multiplier == 0) break;
+
+    add_quotient += add_quotient;
+    if (add_remainder != 0 &&
+        add_remainder >= divisor - add_remainder)
+    {
+      add_remainder -= divisor - add_remainder;
+      add_quotient += 1;
+    }
+    else
+    {
+      add_remainder += add_remainder;
+    }
+  }
+
+  if (remainder != 0 && remainder >= divisor - remainder)
+    quotient += 1;
+  return quotient;
+}
+
+static UI0S32
+rv_progress_slider_max(UI0U64 location_count)
+{
+  return location_count > (UI0U64)INT32_MAX ?
+    INT32_MAX : (UI0S32)location_count;
+}
+
+static UI0S32
+rv_progress_slider_value(UI0U64 location_index, UI0U64 location_count)
+{
+  UI0U64 location_max;
+  UI0U64 slider_offset;
+  const UI0U64 slider_span = (UI0U64)INT32_MAX - 1ull;
+
+  if (location_count == 0) return 1;
+  location_max = location_count - 1ull;
+  if (location_index > location_max) location_index = location_max;
+  if (location_count <= (UI0U64)INT32_MAX)
+    return (UI0S32)(location_index + 1ull);
+
+  slider_offset = rv_round_mul_div_u64(location_index,
+                                       slider_span,
+                                       location_max);
+  return (UI0S32)(slider_offset + 1ull);
+}
+
+static UI0U64
+rv_progress_location_from_slider(UI0S32 slider_value,
+                                 UI0U64 location_count)
+{
+  UI0S32 slider_max;
+  const UI0U64 slider_span = (UI0U64)INT32_MAX - 1ull;
+
+  if (location_count <= 1ull) return 0;
+  slider_max = rv_progress_slider_max(location_count);
+  slider_value = rv_clamp(slider_value, 1, slider_max);
+  if (location_count <= (UI0U64)INT32_MAX)
+    return (UI0U64)(slider_value - 1);
+
+  return rv_round_mul_div_u64((UI0U64)(slider_value - 1),
+                              location_count - 1ull,
+                              slider_span);
+}
+
 static UI0B32
 rv_i64_fits_s32(int64_t value)
 {
@@ -2940,11 +3040,9 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
       (layout->progress_rect.h -
        rv_min(slider_style.track_height, layout->progress_rect.h)) / 2;
     UI0U64 slider_count_u64 = projection->progress.location_count;
-    UI0S32 slider_max = slider_count_u64 > 2147483647ull ?
-      2147483647 : (UI0S32)slider_count_u64;
-    UI0S32 slider_value = projection->progress.location_index + 1ull >
-      (UI0U64)slider_max ? slider_max :
-      (UI0S32)(projection->progress.location_index + 1ull);
+    UI0S32 slider_max = rv_progress_slider_max(slider_count_u64);
+    UI0S32 slider_value = rv_progress_slider_value(
+      projection->progress.location_index, slider_count_u64);
     UI0Rect slider_rect = layout->progress_rect;
     memset(&spec, 0, sizeof(spec));
     spec.id = rv_id(402, 0);
@@ -2996,8 +3094,8 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
     rv_set_semantic_control(ctx, spec.id, ReaderViewSemanticControl_Progress);
     if (result.changed)
     {
-      UI0U64 location = result.next_value > 0 ?
-        (UI0U64)result.next_value - 1ull : 0;
+      UI0U64 location = rv_progress_location_from_slider(
+        result.next_value, slider_count_u64);
       (void)rv_add_action(ctx, ReaderViewAction_SeekLocation, 0, 0,
                           ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                           ReaderViewRightFilter_All, location, rv_text(0, 0));
