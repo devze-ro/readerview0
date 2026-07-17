@@ -140,6 +140,16 @@ find_control_for_source(const ReaderViewFrameStorage *storage, UI0ID source_id)
   return 0;
 }
 
+static const ReaderViewTextBinding *
+find_text_binding(const ReaderViewFrame *frame, UI0ID source_id)
+{
+  UI0S32 index;
+  for (index = 0; index < frame->text_binding_count; ++index)
+    if (frame->text_bindings[index].source_id == source_id)
+      return frame->text_bindings + index;
+  return 0;
+}
+
 static UI0S32
 count_semantic(const ReaderViewFrame *frame, const char *name)
 {
@@ -912,7 +922,10 @@ main(void)
           "reference toolbar buttons retain standard shells");
   }
   node = find_semantic(&frame, "EPUB Reader");
-  check(node != 0 && rect_equal(node->rect, ui0_rect(20, 14, 180, 22)),
+  check(node != 0 && rect_equal(node->rect, ui0_rect(20, 14, 180, 22)) &&
+        find_text_binding(&frame, node ? node->id : 0) != 0 &&
+        find_text_binding(&frame, node ? node->id : 0)->style ==
+          ReaderViewTextStyle_ChromeTitle,
         "portable chrome title uses accepted reference geometry");
   check(find_semantic(&frame, "Host document title") == 0,
         "host document title is not substituted into visible chrome");
@@ -1003,11 +1016,23 @@ main(void)
   }
   node = find_semantic_role(&frame, "3 of 10", ReaderViewSemantic_Status);
   {
+    UI0SliderStyle progress_style = ui0_slider_style_from_resolved(&theme);
+    UI0S32 footer_height = theme.typography[UI0TypographyRole_Body].line_height;
+    UI0S32 footer_gap = theme.spacing[UI0SpacingRole_ControlGap];
+    UI0S32 track_y = 760 +
+      (18 - (progress_style.track_height < 18 ?
+             progress_style.track_height : 18)) / 2;
+    UI0Rect expected_footer =
+      ui0_rect(370, track_y - footer_gap - footer_height,
+               660, footer_height);
     const UI0DrawCommand *label = node ?
       find_draw_for_source(&frame, UI0DrawOp_Text, node->id) : 0;
     check(node != 0 && label != 0 &&
-          rect_equal(label->rect, ui0_rect(370, 746, 660, 14)) &&
-          label->color == theme.colors[UI0ColorRole_TextMuted],
+          rect_equal(label->rect, expected_footer) &&
+          label->color == theme.colors[UI0ColorRole_TextMuted] &&
+          find_text_binding(&frame, node ? node->id : 0) != 0 &&
+          find_text_binding(&frame, node ? node->id : 0)->style ==
+            ReaderViewTextStyle_ChromeMetadata,
           "progress footer uses exact reference placement and muted color");
   }
 
@@ -1074,6 +1099,11 @@ main(void)
     check(node != 0 && rect_equal(node->rect,
                                   ui0_rect(1112, 54, 144, 32)),
           "Font popup first row uses accepted body geometry");
+    check(node != 0 &&
+          find_text_binding(&frame, node ? node->id : 0) != 0 &&
+          find_text_binding(&frame, node ? node->id : 0)->style ==
+            ReaderViewTextStyle_MenuItem,
+          "Font popup row publishes its portable legacy text style");
     check(node != 0 && state.focus_id == node->id && !state.focus_visible,
           "mouse-opened Font popup initializes selected-row focus invisibly");
     if (node)

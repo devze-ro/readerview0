@@ -1022,7 +1022,10 @@ rv_add_semantic(RVBuildContext *ctx,
 }
 
 static UI0B32
-rv_add_binding(RVBuildContext *ctx, UI0ID source_id, ReaderViewText text)
+rv_add_binding(RVBuildContext *ctx,
+               UI0ID source_id,
+               ReaderViewText text,
+               ReaderViewTextStyle style)
 {
   ReaderViewTextBinding *binding;
   if (text.size == 0) return 1;
@@ -1034,6 +1037,7 @@ rv_add_binding(RVBuildContext *ctx, UI0ID source_id, ReaderViewText text)
   binding = ctx->storage->text_bindings + ctx->text_count++;
   binding->source_id = source_id;
   binding->text = text;
+  binding->style = style;
   return 1;
 }
 
@@ -1172,7 +1176,12 @@ rv_add_control_with_hit_rect(RVBuildContext *ctx,
     ctx->input->state->pending_accessibility_focus_id = 0;
     ctx->frame->change_flags |= ReaderViewFrameChange_FocusChanged;
   }
-  (void)rv_add_binding(ctx, id, label);
+  (void)rv_add_binding(ctx,
+                       id,
+                       label,
+                       kind == UI0ControlKind_MenuItem ?
+                         ReaderViewTextStyle_MenuItem :
+                         ReaderViewTextStyle_Default);
   (void)rv_add_semantic(ctx,
                         id,
                         parent_id,
@@ -1293,14 +1302,15 @@ rv_add_icon_control(RVBuildContext *ctx,
 }
 
 static void
-rv_add_text_record(RVBuildContext *ctx,
-                   UI0ID id,
-                   UI0ID parent_id,
-                   UI0Rect rect,
-                   ReaderViewText text,
-                   ReaderViewSemanticRole role,
-                   ReaderViewSemanticFlags flags,
-                   ReaderViewKey source_key)
+rv_add_text_record_styled(RVBuildContext *ctx,
+                          UI0ID id,
+                          UI0ID parent_id,
+                          UI0Rect rect,
+                          ReaderViewText text,
+                          ReaderViewTextStyle style,
+                          ReaderViewSemanticRole role,
+                          ReaderViewSemanticFlags flags,
+                          ReaderViewKey source_key)
 {
   UI0ControlRecord *record;
   if (ctx->control_count >= READER_VIEW_CONTROL_CAP)
@@ -1319,7 +1329,7 @@ rv_add_text_record(RVBuildContext *ctx,
   record->text_rect = rect;
   record->label_hash = rv_text_hash(text);
   record->label_len = text.size;
-  (void)rv_add_binding(ctx, id, text);
+  (void)rv_add_binding(ctx, id, text, style);
   (void)rv_add_semantic(ctx, id, parent_id, role, flags, rect, text,
                         rv_text(0, 0), source_key, 0, 0, 0);
 }
@@ -1637,6 +1647,27 @@ rv_activate_setting(RVBuildContext *ctx,
                         rv_text(0, 0));
 }
 
+static void
+rv_add_text_record(RVBuildContext *ctx,
+                   UI0ID id,
+                   UI0ID parent_id,
+                   UI0Rect rect,
+                   ReaderViewText text,
+                   ReaderViewSemanticRole role,
+                   ReaderViewSemanticFlags flags,
+                   ReaderViewKey source_key)
+{
+  rv_add_text_record_styled(ctx,
+                            id,
+                            parent_id,
+                            rect,
+                            text,
+                            ReaderViewTextStyle_Default,
+                            role,
+                            flags,
+                            source_key);
+}
+
 static UI0Rect
 rv_toolbar_icon_rect(UI0Rect rect)
 {
@@ -1744,17 +1775,18 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
                         0);
   if (document_open && projection->chrome_title.size > 0)
   {
-    rv_add_text_record(ctx,
-                       rv_id(2, 0),
-                       ctx->toolbar_id,
-                       rv_rect(layout->bounds.x + 20,
-                               layout->bounds.y + 14,
-                               180,
-                               22),
-                       projection->chrome_title,
-                       ReaderViewSemantic_Group,
-                       ReaderViewSemantic_Enabled,
-                       0);
+    rv_add_text_record_styled(ctx,
+                              rv_id(2, 0),
+                              ctx->toolbar_id,
+                              rv_rect(layout->bounds.x + 20,
+                                      layout->bounds.y + 14,
+                                      180,
+                                      22),
+                              projection->chrome_title,
+                              ReaderViewTextStyle_ChromeTitle,
+                              ReaderViewSemantic_Group,
+                              ReaderViewSemantic_Enabled,
+                              0);
   }
 
   if (!document_open)
@@ -2856,6 +2888,16 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
   {
     UI0SliderRectSpec spec;
     UI0SliderResult result;
+    UI0SliderStyle slider_style =
+      ui0_slider_style_from_resolved(ctx->input->theme);
+    UI0TypographyToken footer_typography =
+      ctx->input->theme->typography[UI0TypographyRole_Body];
+    UI0S32 footer_height = rv_max(footer_typography.line_height, 1);
+    UI0S32 footer_gap = rv_max(
+      ctx->input->theme->spacing[UI0SpacingRole_ControlGap], 0);
+    UI0S32 visual_track_y = layout->progress_rect.y +
+      (layout->progress_rect.h -
+       rv_min(slider_style.track_height, layout->progress_rect.h)) / 2;
     UI0U64 slider_count_u64 = projection->progress.location_count;
     UI0S32 slider_max = slider_count_u64 > 2147483647ull ?
       2147483647 : (UI0S32)slider_count_u64;
@@ -2918,14 +2960,16 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
                           ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                           ReaderViewRightFilter_All, location, rv_text(0, 0));
     }
-    rv_add_text_record(ctx, rv_id(403, 0), 0,
-                       rv_rect(layout->page_surface_rect.x,
-                               layout->progress_rect.y - 14,
-                               layout->page_surface_rect.w,
-                               14),
-                       projection->progress.label,
-                       ReaderViewSemantic_Status,
-                       ReaderViewSemantic_Enabled, 0);
+    rv_add_text_record_styled(ctx, rv_id(403, 0), 0,
+                              rv_rect(layout->page_surface_rect.x,
+                                      visual_track_y - footer_gap -
+                                        footer_height,
+                                      layout->page_surface_rect.w,
+                                      footer_height),
+                              projection->progress.label,
+                              ReaderViewTextStyle_ChromeMetadata,
+                              ReaderViewSemantic_Status,
+                              ReaderViewSemantic_Enabled, 0);
   }
 }
 

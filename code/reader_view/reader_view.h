@@ -589,10 +589,19 @@ typedef struct ReaderViewAction
   ReaderViewText text;
 } ReaderViewAction;
 
+typedef enum ReaderViewTextStyle
+{
+  ReaderViewTextStyle_Default,
+  ReaderViewTextStyle_ChromeTitle,
+  ReaderViewTextStyle_ChromeMetadata,
+  ReaderViewTextStyle_MenuItem,
+} ReaderViewTextStyle;
+
 typedef struct ReaderViewTextBinding
 {
   UI0ID source_id;
   ReaderViewText text;
+  ReaderViewTextStyle style;
 } ReaderViewTextBinding;
 
 typedef enum ReaderViewSemanticRole

@@ -2,7 +2,7 @@
 
 Date: 2026-07-17
 
-Status: implemented and locally validated; host adoption remains outstanding
+Status: implemented and locally validated; host adoption is validated separately
 
 ## Outcome
 
@@ -30,6 +30,14 @@ feature, document-flag, and transient-panel snapshot. A host must paint the
 page and EPUB content using those returned rectangles instead of independently
 reconstructing central geometry.
 
+`ReaderViewTextBinding` now carries one finite portable `ReaderViewTextStyle`.
+The shared frame distinguishes the accepted chrome title, chrome metadata, and
+menu-item text paths from the default UI0 text path. The record contains no
+font object, native handle, callback, provider, or allocation; each host maps
+the finite style to its existing concrete text renderer. This preserves the
+accepted title scale, menu metrics, and progress-footer metrics without moving
+font lifetime or native rendering into readerview0.
+
 The following public constants lock the accepted chrome scalars:
 
 | Constant | Value |
@@ -54,6 +62,11 @@ Loaded chrome has twelve fixed 30 by 28 px slots, an 8 px ordinary gap, and an
 18 px gap before the post-navigation group. The row is inset 20 px from the
 right and 10 px from the top. Slots 0 through 10 are shared; slot 11 is reserved
 for the host trailing Exit action.
+
+The toolbar surface remains semantic-only: it groups the controls but emits no
+full-width painted band. Each icon control retains the accepted standard UI0
+button shell. The host trailing action must use the same shell and canonical
+icon treatment when it occupies the reserved slot.
 
 The shared visible order is:
 
@@ -123,7 +136,12 @@ accessibility invocation continue to return the existing PreviousPage and
 NextPage actions.
 
 Progress uses the entire accepted page width and preserves its semantic slider
-range, focus, keyboard movement, and SeekLocation action.
+range, focus, keyboard movement, and SeekLocation action. Its visible thumb is
+suppressed while idle and appears for hover, press, active, focus-visible, or
+drag state. The metadata label is placed from the resolved track height,
+ControlGap spacing token, and Body line height, then published with the muted
+chrome-metadata style. The public progress location remains zero-based even
+though the accepted visual slider position is one-based.
 
 The Font popup is anchored 6 px below the Font slot. With the accepted theme
 metrics and five projected choices its outer rectangle is
@@ -169,8 +187,8 @@ Strict MSVC C11 `/W4 /WX` validation covers:
 
 ## Deferred work
 
-This foundation slice does not adopt API 3 in re10 or lectern0, change their
-central render adapters, or claim decoded-pixel recovery. It deliberately keeps
-the existing left/right panel internals, selection tools, and note-editor
-details for the next bounded recovery slice. It adds no PDF support and begins
-no Kindle-gap feature work.
+Host adoption, decoded-pixel comparison, and host-specific interaction checks
+are recorded in each consumer repository rather than inferred from package
+tests. This package slice deliberately keeps the existing left/right panel
+internals, selection tools, and note-editor details unchanged. It adds no PDF
+support and begins no Kindle-gap feature work.
