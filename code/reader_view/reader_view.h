@@ -639,6 +639,27 @@ enum
   ReaderViewSemantic_ReadOnly  = 1u << 9,
 };
 
+typedef enum ReaderViewSemanticControl
+{
+  ReaderViewSemanticControl_None,
+  ReaderViewSemanticControl_Open,
+  ReaderViewSemanticControl_Contents,
+  ReaderViewSemanticControl_Find,
+  ReaderViewSemanticControl_HistoryBack,
+  ReaderViewSemanticControl_HistoryForward,
+  ReaderViewSemanticControl_Fullscreen,
+  ReaderViewSemanticControl_DistractionFree,
+  ReaderViewSemanticControl_FontSize,
+  ReaderViewSemanticControl_LineSpacing,
+  ReaderViewSemanticControl_FontFamily,
+  ReaderViewSemanticControl_Theme,
+  ReaderViewSemanticControl_Annotations,
+  ReaderViewSemanticControl_Bookmark,
+  ReaderViewSemanticControl_PreviousPage,
+  ReaderViewSemanticControl_NextPage,
+  ReaderViewSemanticControl_Progress,
+} ReaderViewSemanticControl;
+
 typedef struct ReaderViewSemanticNode
 {
   UI0ID id;
@@ -648,6 +669,7 @@ typedef struct ReaderViewSemanticNode
   UI0Rect rect;
   ReaderViewText name;
   ReaderViewText value;
+  ReaderViewSemanticControl control;
   ReaderViewKey source_key;
   UI0U64 range_value;
   UI0U64 range_min;

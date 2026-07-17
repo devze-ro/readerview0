@@ -341,6 +341,7 @@ rvd_semantic_hash(const ReaderViewFrame *frame, UI0S32 origin_x, UI0S32 origin_y
     hash = rvd_hash_rect(hash, node->rect, origin_x, origin_y);
     hash = rvd_hash_text(hash, node->name);
     hash = rvd_hash_text(hash, node->value);
+    hash = rvd_hash_u64(hash, (UI0U64)node->control);
     hash = rvd_hash_u64(hash, node->range_value);
     hash = rvd_hash_u64(hash, node->range_min);
     hash = rvd_hash_u64(hash, node->range_max);

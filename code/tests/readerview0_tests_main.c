@@ -905,6 +905,37 @@ main(void)
                      UI0IconKind_Bookmark,
                      "Bookmark icon control geometry and identity");
   check_loaded_toolbar_icon_order(&frame);
+  {
+    struct SemanticControlExpectation
+    {
+      const char *name;
+      ReaderViewSemanticControl control;
+    } expectations[] = {
+      {"Contents", ReaderViewSemanticControl_Contents},
+      {"Find", ReaderViewSemanticControl_Find},
+      {"Back", ReaderViewSemanticControl_HistoryBack},
+      {"Forward", ReaderViewSemanticControl_HistoryForward},
+      {"Full screen", ReaderViewSemanticControl_Fullscreen},
+      {"Size", ReaderViewSemanticControl_FontSize},
+      {"Spacing", ReaderViewSemanticControl_LineSpacing},
+      {"Font", ReaderViewSemanticControl_FontFamily},
+      {"Theme", ReaderViewSemanticControl_Theme},
+      {"Annotations", ReaderViewSemanticControl_Annotations},
+      {"Bookmark", ReaderViewSemanticControl_Bookmark},
+    };
+    UI0S32 expectation_index;
+    for (expectation_index = 0;
+         expectation_index < (UI0S32)(sizeof(expectations) /
+                                      sizeof(expectations[0]));
+         expectation_index += 1)
+    {
+      const ReaderViewSemanticNode *control_node =
+        find_semantic(&frame, expectations[expectation_index].name);
+      check(control_node != 0 &&
+            control_node->control == expectations[expectation_index].control,
+            "toolbar publishes stable portable control identity");
+    }
+  }
   node = find_semantic_role(&frame, "Reader toolbar",
                             ReaderViewSemantic_Toolbar);
   check(node != 0 &&
@@ -1006,6 +1037,7 @@ main(void)
 
   node = find_semantic(&frame, "3 of 10");
   check(node != 0 && node->role == ReaderViewSemantic_Slider &&
+        node->control == ReaderViewSemanticControl_Progress &&
         rect_equal(node->rect, ui0_rect(370, 760, 660, 18)),
         "progress semantic spans the exact page width");
   if (node)
@@ -1038,6 +1070,7 @@ main(void)
 
   node = find_semantic(&frame, "Previous page");
   check(node != 0 &&
+        node->control == ReaderViewSemanticControl_PreviousPage &&
         rect_equal(node->rect, ui0_rect(4, 56, 366, 686)) &&
         count_draw_op_for_source(&frame, UI0DrawOp_Text,
                                  node ? node->id : 0) == 0 &&

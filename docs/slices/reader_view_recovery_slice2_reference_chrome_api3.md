@@ -38,6 +38,12 @@ the finite style to its existing concrete text renderer. This preserves the
 accepted title scale, menu metrics, and progress-footer metrics without moving
 font lifetime or native rendering into readerview0.
 
+Focusable chrome semantics also carry a finite `ReaderViewSemanticControl`
+identity for the toolbar, page gutters, and progress slider. Native adapters
+use that identity when synchronizing focus; they must not infer control meaning
+from localized or caller-provided accessible names. Projected menu choices keep
+their caller-provided `source_key` alongside the portable control identity.
+
 The following public constants lock the accepted chrome scalars:
 
 | Constant | Value |
@@ -176,6 +182,7 @@ Strict MSVC C11 `/W4 /WX` validation covers:
 - fixed toolbar order, slot rectangles, icon identities, and absence of loaded
   Open or toolbar text draw commands;
 - portable title identity and geometry without document-title substitution;
+- stable semantic control identities independent of projected labels;
 - gutter visual versus hit geometry and pointer action execution;
 - page-width progress semantics and keyboard action execution;
 - exact Font popup/row geometry and SelectSetting execution;

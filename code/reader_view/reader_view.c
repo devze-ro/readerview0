@@ -1021,6 +1021,24 @@ rv_add_semantic(RVBuildContext *ctx,
   return 1;
 }
 
+static void
+rv_set_semantic_control(RVBuildContext *ctx,
+                        UI0ID id,
+                        ReaderViewSemanticControl control)
+{
+  UI0S32 index;
+  if (!ctx || control == ReaderViewSemanticControl_None) return;
+  for (index = ctx->semantic_count - 1; index >= 0; index -= 1)
+  {
+    ReaderViewSemanticNode *node = ctx->storage->semantic_nodes + index;
+    if (node->id == id)
+    {
+      node->control = control;
+      return;
+    }
+  }
+}
+
 static UI0B32
 rv_add_binding(RVBuildContext *ctx,
                UI0ID source_id,
@@ -1681,6 +1699,7 @@ rv_toolbar_icon_rect(UI0Rect rect)
 static UI0B32
 rv_toolbar_icon_control(RVBuildContext *ctx,
                         UI0U64 tag,
+                        ReaderViewSemanticControl semantic_control,
                         UI0S32 slot,
                         ReaderViewText label,
                         ReaderViewText value,
@@ -1692,9 +1711,10 @@ rv_toolbar_icon_control(RVBuildContext *ctx,
 {
   UI0S32 control_index = ctx->control_count;
   UI0B32 invoked;
+  UI0ID id = rv_id(tag, 0);
   UI0Rect rect = rv_toolbar_slot_rect(ctx->input->layout, slot);
   invoked = rv_add_icon_control(ctx,
-                                rv_id(tag, 0),
+                                id,
                                 ctx->toolbar_id,
                                 UI0ControlKind_IconButton,
                                 ReaderViewSemantic_Button,
@@ -1716,6 +1736,7 @@ rv_toolbar_icon_control(RVBuildContext *ctx,
   {
     ctx->storage->control_records[control_index].control_flags &=
       ~UI0Control_Quiet;
+    rv_set_semantic_control(ctx, id, semantic_control);
   }
   return invoked;
 }
@@ -1737,6 +1758,13 @@ rv_build_toolbar_setting(RVBuildContext *ctx,
   if (rv_toolbar_icon_control(
         ctx,
         30 + (UI0U64)kind,
+        kind == ReaderViewSetting_FontSize ?
+          ReaderViewSemanticControl_FontSize :
+        kind == ReaderViewSetting_LineSpacing ?
+          ReaderViewSemanticControl_LineSpacing :
+        kind == ReaderViewSetting_FontFamily ?
+          ReaderViewSemanticControl_FontFamily :
+          ReaderViewSemanticControl_Theme,
         slot,
         label,
         rv_selected_choice_label(&setting->choices),
@@ -1793,7 +1821,8 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
   {
     if (rv_has_feature(projection, ReaderViewFeature_Open) &&
         rv_toolbar_icon_control(
-          ctx, 10, 0, labels.open, rv_text(0, 0),
+          ctx, 10, ReaderViewSemanticControl_Open, 0,
+          labels.open, rv_text(0, 0),
           rv_has_document_flag(projection, ReaderViewDocument_CanOpen),
           0, 0, 0, UI0IconKind_BookOpen))
     {
@@ -1806,7 +1835,8 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
 
   if (rv_has_feature(projection, ReaderViewFeature_Contents) &&
       rv_toolbar_icon_control(
-        ctx, 11, 0, labels.contents, rv_text(0, 0), 1,
+        ctx, 11, ReaderViewSemanticControl_Contents, 0,
+        labels.contents, rv_text(0, 0), 1,
         ctx->input->state->left_panel == ReaderViewLeftPanel_Contents,
         ctx->input->state->left_panel == ReaderViewLeftPanel_Contents,
         ctx->input->state->left_panel == ReaderViewLeftPanel_Contents,
@@ -1816,7 +1846,8 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
   }
   if (rv_has_feature(projection, ReaderViewFeature_Find) &&
       rv_toolbar_icon_control(
-        ctx, 12, 1, labels.find, rv_text(0, 0), 1,
+        ctx, 12, ReaderViewSemanticControl_Find, 1,
+        labels.find, rv_text(0, 0), 1,
         ctx->input->state->left_panel == ReaderViewLeftPanel_Find,
         ctx->input->state->left_panel == ReaderViewLeftPanel_Find,
         ctx->input->state->left_panel == ReaderViewLeftPanel_Find,
@@ -1827,14 +1858,16 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
   if (rv_has_feature(projection, ReaderViewFeature_History))
   {
     if (rv_toolbar_icon_control(
-          ctx, 13, 2, labels.back, rv_text(0, 0),
+          ctx, 13, ReaderViewSemanticControl_HistoryBack, 2,
+          labels.back, rv_text(0, 0),
           rv_has_document_flag(projection, ReaderViewDocument_CanGoBack),
           0, 0, 0, UI0IconKind_ArrowLeft))
       (void)rv_add_action(ctx, ReaderViewAction_HistoryBack, 0, 0,
                           ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                           ReaderViewRightFilter_All, 0, rv_text(0, 0));
     if (rv_toolbar_icon_control(
-          ctx, 14, 3, labels.forward, rv_text(0, 0),
+          ctx, 14, ReaderViewSemanticControl_HistoryForward, 3,
+          labels.forward, rv_text(0, 0),
           rv_has_document_flag(projection, ReaderViewDocument_CanGoForward),
           0, 0, 0, UI0IconKind_ArrowRight))
       (void)rv_add_action(ctx, ReaderViewAction_HistoryForward, 0, 0,
@@ -1849,7 +1882,8 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
     ReaderViewText fullscreen_label = fullscreen ?
       labels.exit_fullscreen : labels.fullscreen;
     if (rv_toolbar_icon_control(
-          ctx, 16, 4, fullscreen_label, rv_text(0, 0),
+          ctx, 16, ReaderViewSemanticControl_Fullscreen, 4,
+          fullscreen_label, rv_text(0, 0),
           rv_has_document_flag(projection,
             ReaderViewDocument_CanToggleFullscreen),
           fullscreen, fullscreen, 0,
@@ -1863,7 +1897,8 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
     UI0B32 active = rv_has_document_flag(
       projection, ReaderViewDocument_DistractionFree);
     if (rv_toolbar_icon_control(
-          ctx, 15, 4, labels.distraction_free, rv_text(0, 0),
+          ctx, 15, ReaderViewSemanticControl_DistractionFree, 4,
+          labels.distraction_free, rv_text(0, 0),
           rv_has_document_flag(projection,
             ReaderViewDocument_CanToggleDistraction),
           active, active, 0,
@@ -1887,7 +1922,8 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
 
   if (rv_has_feature(projection, ReaderViewFeature_Annotations) &&
       rv_toolbar_icon_control(
-        ctx, 17, 9, labels.annotations, rv_text(0, 0), 1,
+        ctx, 17, ReaderViewSemanticControl_Annotations, 9,
+        labels.annotations, rv_text(0, 0), 1,
         ctx->input->state->right_panel_open,
         ctx->input->state->right_panel_open,
         ctx->input->state->right_panel_open,
@@ -1901,7 +1937,7 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
     UI0B32 bookmarked = rv_has_document_flag(
       projection, ReaderViewDocument_CurrentBookmarked);
     if (rv_toolbar_icon_control(
-          ctx, 18, 10,
+          ctx, 18, ReaderViewSemanticControl_Bookmark, 10,
           bookmarked ? labels.remove_bookmark : labels.bookmark,
           rv_text(0, 0), 1, bookmarked, bookmarked, 0,
           UI0IconKind_Bookmark))
@@ -2808,6 +2844,7 @@ rv_gutter_icon_rect(UI0Rect visual_rect)
 static UI0B32
 rv_gutter_icon_control(RVBuildContext *ctx,
                        UI0U64 tag,
+                       ReaderViewSemanticControl semantic_control,
                        UI0Rect hot_rect,
                        UI0Rect visual_rect,
                        ReaderViewText label,
@@ -2852,6 +2889,10 @@ rv_gutter_icon_control(RVBuildContext *ctx,
                 UI0ControlState_Pressed |
                 UI0ControlState_FocusVisible)) != 0;
   }
+  if (ctx->control_count > control_index)
+  {
+    rv_set_semantic_control(ctx, rv_id(tag, 0), semantic_control);
+  }
   return invoked;
 }
 
@@ -2862,7 +2903,7 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
   const ReaderViewLayout *layout = ctx->input->layout;
   if (layout->previous_gutter_visible &&
       rv_gutter_icon_control(
-        ctx, 400,
+        ctx, 400, ReaderViewSemanticControl_PreviousPage,
         layout->previous_gutter_rect,
         layout->previous_gutter_visual_rect,
         labels.previous_page,
@@ -2874,7 +2915,7 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
                         ReaderViewRightFilter_All, 0, rv_text(0, 0));
   if (layout->next_gutter_visible &&
       rv_gutter_icon_control(
-        ctx, 401,
+        ctx, 401, ReaderViewSemanticControl_NextPage,
         layout->next_gutter_rect,
         layout->next_gutter_visual_rect,
         labels.next_page,
@@ -2952,6 +2993,7 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
                           projection->progress.chapter, 0,
                           projection->progress.location_index, 0,
                           projection->progress.location_count - 1);
+    rv_set_semantic_control(ctx, spec.id, ReaderViewSemanticControl_Progress);
     if (result.changed)
     {
       UI0U64 location = result.next_value > 0 ?
