@@ -2724,14 +2724,17 @@ reader_view_build(const ReaderViewBuildInput *input,
     out_frame->change_flags = ReaderViewFrameChange_ProjectionInvalid;
     return 0;
   }
-  if (input->state->document_key == 0)
-    reader_view_state_reset_document(input->state,
-                                     input->projection->document_key);
-  else if (input->state->document_key != input->projection->document_key)
+  if (input->state->document_key != input->projection->document_key)
   {
-    out_frame->error_flags = ReaderViewFrameError_StaleDocumentState;
-    out_frame->change_flags = ReaderViewFrameChange_ProjectionInvalid;
-    return 0;
+    if (input->state->document_key == 0)
+      reader_view_state_reset_document(input->state,
+                                       input->projection->document_key);
+    else
+    {
+      out_frame->error_flags = ReaderViewFrameError_StaleDocumentState;
+      out_frame->change_flags = ReaderViewFrameChange_ProjectionInvalid;
+      return 0;
+    }
   }
 
   memset(&ctx, 0, sizeof(ctx));

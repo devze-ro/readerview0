@@ -231,6 +231,129 @@ full_projection(ReaderViewSettingControl *settings,
   return result;
 }
 
+static void
+test_zero_document_interaction(const UI0ResolvedTheme *theme)
+{
+  static ReaderViewState state;
+  static ReaderViewFrameStorage storage;
+  ReaderViewLayoutInput layout_input;
+  ReaderViewLayout layout;
+  ReaderViewProjection projection = minimal_projection();
+  ReaderViewInput frame_input;
+  ReaderViewBuildInput build_input;
+  ReaderViewFrame frame;
+  const ReaderViewSemanticNode *open;
+  UI0ID open_id = 0;
+  UI0Rect open_rect = ui0_rect(0, 0, 0, 0);
+
+  projection.document_key = 0;
+  projection.features = ReaderViewFeature_Open;
+  projection.document_flags = ReaderViewDocument_CanOpen;
+  projection.content.state = ReaderViewLoad_Empty;
+
+  reader_view_state_init(&state);
+  memset(&layout_input, 0, sizeof(layout_input));
+  layout_input.bounds = ui0_rect(0, 0, 1280, 800);
+  layout_input.features = projection.features;
+  layout_input.document_flags = projection.document_flags;
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "zero-document layout resolves");
+
+  memset(&frame_input, 0, sizeof(frame_input));
+  memset(&build_input, 0, sizeof(build_input));
+  build_input.frame_index = 1;
+  build_input.state = &state;
+  build_input.layout = &layout;
+  build_input.projection = &projection;
+  build_input.input = &frame_input;
+  build_input.theme = theme;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "zero-document seed build");
+  open = find_semantic(&frame, "Open");
+  check(open != 0, "zero-document Open semantic present");
+  if (open)
+  {
+    open_id = open->id;
+    open_rect = open->rect;
+    frame_input.ui = ui0_input_pointer(open_rect.x + open_rect.w / 2,
+                                       open_rect.y + open_rect.h / 2,
+                                       1, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "zero-document Open press build");
+    check(state.active_id == open_id,
+          "zero-document Open press remains active");
+
+    frame_input.ui = ui0_input_pointer(open_rect.x + open_rect.w / 2,
+                                       open_rect.y + open_rect.h / 2,
+                                       0, 0, 1);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "zero-document Open release build");
+    check(find_action(&frame, ReaderViewAction_Open) != 0,
+          "zero-document Open release emits action");
+
+    check(reader_view_accessibility_focus(&state, open_id),
+          "zero-document Open focus queued");
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "zero-document Open focus build");
+    open = find_semantic(&frame, "Open");
+    check(open && (open->flags & ReaderViewSemantic_Focused) != 0,
+          "zero-document Open focus is published");
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "zero-document Open retained-focus build");
+    open = find_semantic(&frame, "Open");
+    check(open && (open->flags & ReaderViewSemantic_Focused) != 0 &&
+          state.focus_id == open_id,
+          "zero-document frame preserves focus state");
+  }
+
+  state.left_panel = ReaderViewLeftPanel_Find;
+  state.most_recent_panel = ReaderViewPanel_Left;
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "zero-document retained-state build");
+  check(state.left_panel == ReaderViewLeftPanel_Find &&
+        state.most_recent_panel == ReaderViewPanel_Left,
+        "zero-document frame preserves transient panel state");
+
+  projection.document_key = 77;
+  projection.document_flags = ReaderViewDocument_Open |
+                              ReaderViewDocument_CanOpen;
+  projection.content = ready_status();
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "zero-to-document transition build");
+  check(state.document_key == 77 &&
+        state.left_panel == ReaderViewLeftPanel_None &&
+        state.most_recent_panel == ReaderViewPanel_None &&
+        state.active_id == 0 && state.focus_id == 0,
+        "zero-to-document transition resets transient state");
+
+  projection.document_key = 0;
+  projection.document_flags = ReaderViewDocument_CanOpen;
+  projection.content.state = ReaderViewLoad_Empty;
+  build_input.frame_index += 1;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_StaleDocumentState) != 0,
+        "document-to-zero transition requires explicit reset");
+  check(state.document_key == 77,
+        "stale document transition does not mutate state");
+
+  reader_view_state_reset_document(&state, 0);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "explicit document-to-zero reset build");
+  check(state.document_key == 0 &&
+        state.left_panel == ReaderViewLeftPanel_None &&
+        state.active_id == 0 && state.focus_id == 0,
+        "explicit document-to-zero reset clears transient state");
+}
+
 int
 main(void)
 {
@@ -271,6 +394,8 @@ main(void)
   check(READERVIEW0_UI0_REQUIRED_API_VERSION == 90 &&
         UI0_API_VERSION == 90,
         "exact UI0 API version");
+
+  test_zero_document_interaction(&theme);
 
   geometry_style = reader_view_default_content_geometry_style();
   memset(&geometry, 0, sizeof(geometry));

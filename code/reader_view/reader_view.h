@@ -708,6 +708,12 @@ typedef struct ReaderViewFrame
 ReaderViewLabels reader_view_default_english_labels(void);
 
 void reader_view_state_init(ReaderViewState *state);
+/*
+ * A matching document key, including zero, is the same document identity and
+ * preserves transient interaction state across builds. The first nonzero
+ * projection may bind a zero-key state automatically. Callers must explicitly
+ * reset before every transition away from a nonzero document key.
+ */
 void reader_view_state_reset_document(ReaderViewState *state,
                                       UI0U64 document_key);
 ReaderViewText reader_view_find_query(const ReaderViewState *state);
