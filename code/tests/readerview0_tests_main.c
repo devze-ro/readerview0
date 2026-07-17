@@ -117,6 +117,29 @@ find_icon_for_source(const ReaderViewFrame *frame, UI0ID source_id)
   return 0;
 }
 
+static const UI0DrawCommand *
+find_draw_for_source(const ReaderViewFrame *frame,
+                     UI0DrawOpKind op,
+                     UI0ID source_id)
+{
+  UI0S32 index;
+  for (index = 0; index < frame->draw_command_count; ++index)
+    if (frame->draw_commands[index].op == op &&
+        frame->draw_commands[index].source_id == source_id)
+      return frame->draw_commands + index;
+  return 0;
+}
+
+static const UI0ControlRecord *
+find_control_for_source(const ReaderViewFrameStorage *storage, UI0ID source_id)
+{
+  UI0S32 index;
+  for (index = 0; index < READER_VIEW_CONTROL_CAP; ++index)
+    if (storage->control_records[index].id == source_id)
+      return storage->control_records + index;
+  return 0;
+}
+
 static UI0S32
 count_semantic(const ReaderViewFrame *frame, const char *name)
 {
@@ -872,6 +895,22 @@ main(void)
                      UI0IconKind_Bookmark,
                      "Bookmark icon control geometry and identity");
   check_loaded_toolbar_icon_order(&frame);
+  node = find_semantic_role(&frame, "Reader toolbar",
+                            ReaderViewSemantic_Toolbar);
+  check(node != 0 &&
+        find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                             node ? node->id : 0) == 0 &&
+        find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
+                             node ? node->id : 0) == 0,
+        "reference toolbar is semantic-only without a painted band");
+  node = find_semantic(&frame, "Contents");
+  {
+    const UI0ControlRecord *control = node ?
+      find_control_for_source(&storage, node->id) : 0;
+    check(control != 0 && control->kind == UI0ControlKind_IconButton &&
+          (control->control_flags & UI0Control_Quiet) == 0,
+          "reference toolbar buttons retain standard shells");
+  }
   node = find_semantic(&frame, "EPUB Reader");
   check(node != 0 && rect_equal(node->rect, ui0_rect(20, 14, 180, 22)),
         "portable chrome title uses accepted reference geometry");
@@ -956,14 +995,29 @@ main(void)
   check(node != 0 && node->role == ReaderViewSemantic_Slider &&
         rect_equal(node->rect, ui0_rect(370, 760, 660, 18)),
         "progress semantic spans the exact page width");
+  if (node)
+  {
+    check(count_draw_op_for_source(&frame, UI0DrawOp_SliderThumb,
+                                   node->id) == 0,
+          "idle reference progress hides its thumb");
+  }
+  node = find_semantic_role(&frame, "3 of 10", ReaderViewSemantic_Status);
+  {
+    const UI0DrawCommand *label = node ?
+      find_draw_for_source(&frame, UI0DrawOp_Text, node->id) : 0;
+    check(node != 0 && label != 0 &&
+          rect_equal(label->rect, ui0_rect(370, 746, 660, 14)) &&
+          label->color == theme.colors[UI0ColorRole_TextMuted],
+          "progress footer uses exact reference placement and muted color");
+  }
 
   node = find_semantic(&frame, "Previous page");
   check(node != 0 &&
-        rect_equal(node->rect, ui0_rect(165, 355, 44, 88)) &&
+        rect_equal(node->rect, ui0_rect(4, 56, 366, 686)) &&
         count_draw_op_for_source(&frame, UI0DrawOp_Text,
                                  node ? node->id : 0) == 0 &&
         find_icon_for_source(&frame, node ? node->id : 0) == 0,
-        "idle previous gutter uses visual semantic rect without text");
+        "idle previous gutter exposes its full hot rect without paint");
   if (node)
   {
     UI0ID previous_id = node->id;
@@ -1020,6 +1074,8 @@ main(void)
     check(node != 0 && rect_equal(node->rect,
                                   ui0_rect(1112, 54, 144, 32)),
           "Font popup first row uses accepted body geometry");
+    check(node != 0 && state.focus_id == node->id && !state.focus_visible,
+          "mouse-opened Font popup initializes selected-row focus invisibly");
     if (node)
     {
       UI0Rect row_rect = node->rect;

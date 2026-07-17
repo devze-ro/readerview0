@@ -63,6 +63,7 @@ typedef struct RVBuildContext
   UI0ID right_panel_id;
   UI0ID popup_id;
   UI0ID modal_id;
+  UI0B32 progress_thumb_visible;
 } RVBuildContext;
 
 static ReaderViewText
@@ -1178,7 +1179,7 @@ rv_add_control_with_hit_rect(RVBuildContext *ctx,
                         role,
                         rv_semantic_flags(ctx, id, enabled, 1,
                                           selected, checked, open),
-                        rect,
+                        hit_rect,
                         label,
                         value,
                         source_key,
@@ -1658,26 +1659,34 @@ rv_toolbar_icon_control(RVBuildContext *ctx,
                         UI0B32 open,
                         UI0IconKind icon_kind)
 {
+  UI0S32 control_index = ctx->control_count;
+  UI0B32 invoked;
   UI0Rect rect = rv_toolbar_slot_rect(ctx->input->layout, slot);
-  return rv_add_icon_control(ctx,
-                             rv_id(tag, 0),
-                             ctx->toolbar_id,
-                             UI0ControlKind_ToolbarItem,
-                             ReaderViewSemantic_Button,
-                             UI0RootKind_Normal,
-                             rect,
-                             rect,
-                             label,
-                             value,
-                             0,
-                             enabled,
-                             selected,
-                             checked,
-                             open,
-                             0,
-                             icon_kind,
-                             rv_toolbar_icon_rect(rect),
-                             1);
+  invoked = rv_add_icon_control(ctx,
+                                rv_id(tag, 0),
+                                ctx->toolbar_id,
+                                UI0ControlKind_IconButton,
+                                ReaderViewSemantic_Button,
+                                UI0RootKind_Normal,
+                                rect,
+                                rect,
+                                label,
+                                value,
+                                0,
+                                enabled,
+                                selected,
+                                checked,
+                                open,
+                                0,
+                                icon_kind,
+                                rv_toolbar_icon_rect(rect),
+                                1);
+  if (ctx->control_count > control_index)
+  {
+    ctx->storage->control_records[control_index].control_flags &=
+      ~UI0Control_Quiet;
+  }
+  return invoked;
 }
 
 static void
@@ -1721,12 +1730,18 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
 
   if (!layout->toolbar_visible || layout->shared_toolbar_rect.w <= 0) return;
   ctx->toolbar_id = rv_id(1, 0);
-  (void)rv_add_surface(ctx, ctx->toolbar_id, 0,
-                       UI0ControlKind_ToolbarSurface,
-                       ReaderViewSemantic_Toolbar,
-                       UI0RootKind_Normal,
-                       layout->toolbar_rect,
-                       rv_literal("Reader toolbar"));
+  (void)rv_add_semantic(ctx,
+                        ctx->toolbar_id,
+                        0,
+                        ReaderViewSemantic_Toolbar,
+                        ReaderViewSemantic_Enabled,
+                        layout->toolbar_rect,
+                        rv_literal("Reader toolbar"),
+                        rv_text(0, 0),
+                        0,
+                        0,
+                        0,
+                        0);
   if (document_open && projection->chrome_title.size > 0)
   {
     rv_add_text_record(ctx,
@@ -1993,6 +2008,22 @@ rv_build_setting_popup(RVBuildContext *ctx, UI0Rect popup)
   choice_count = setting->kind == ReaderViewSetting_FontFamily ?
     rv_min(setting->choices.count, RV_FONT_POPUP_CHOICE_CAP) :
     setting->choices.count;
+  if (setting->kind == ReaderViewSetting_FontFamily &&
+      ctx->signals.focus_id == ctx->input->state->restore_focus_id)
+  {
+    for (index = 0; index < choice_count; ++index)
+    {
+      const ReaderViewChoice *choice = setting->choices.items + index;
+      if ((choice->flags & (ReaderViewChoice_Enabled |
+                            ReaderViewChoice_Selected)) ==
+          (ReaderViewChoice_Enabled | ReaderViewChoice_Selected))
+      {
+        ctx->signals.focus_id = rv_id(100, choice->key);
+        ctx->signals.focus_visible_id = 0;
+        break;
+      }
+    }
+  }
   for (index = 0; index < choice_count; ++index)
   {
     const ReaderViewChoice *choice = setting->choices.items + index;
@@ -2825,9 +2856,12 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
   {
     UI0SliderRectSpec spec;
     UI0SliderResult result;
-    UI0S32 slider_value = projection->progress.location_count > 1 ?
-      (UI0S32)((projection->progress.location_index * 10000ull) /
-               (projection->progress.location_count - 1ull)) : 0;
+    UI0U64 slider_count_u64 = projection->progress.location_count;
+    UI0S32 slider_max = slider_count_u64 > 2147483647ull ?
+      2147483647 : (UI0S32)slider_count_u64;
+    UI0S32 slider_value = projection->progress.location_index + 1ull >
+      (UI0U64)slider_max ? slider_max :
+      (UI0S32)(projection->progress.location_index + 1ull);
     UI0Rect slider_rect = layout->progress_rect;
     memset(&spec, 0, sizeof(spec));
     spec.id = rv_id(402, 0);
@@ -2836,8 +2870,8 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
     spec.hit_rect = slider_rect;
     spec.clip_rect = layout->progress_rect;
     spec.value = slider_value;
-    spec.min_value = 0;
-    spec.max_value = 10000;
+    spec.min_value = 1;
+    spec.max_value = slider_max;
     spec.step = 1;
     if (ctx->input->state->pending_accessibility_focus_id == spec.id)
     {
@@ -2860,9 +2894,14 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
       }
     }
     spec.keyboard_delta = ctx->signals.focus_id == spec.id ?
-      ctx->input->input->move_horizontal_delta * 100 : 0;
+      ctx->input->input->move_horizontal_delta : 0;
     if (!projection->progress.can_seek) spec.flags |= UI0Slider_Disabled;
     result = ui0_slider_rect(&ctx->sliders, &ctx->signals, spec);
+    ctx->progress_thumb_visible = projection->progress.can_seek &&
+      (result.state & (UI0SliderState_Hovered |
+                       UI0SliderState_Pressed |
+                       UI0SliderState_Active |
+                       UI0SliderState_Dragged)) != 0;
     (void)rv_add_semantic(ctx, spec.id, 0, ReaderViewSemantic_Slider,
                           rv_semantic_flags(ctx, spec.id,
                                             projection->progress.can_seek, 1,
@@ -2873,22 +2912,54 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
                           projection->progress.location_count - 1);
     if (result.changed)
     {
-      UI0U64 location = projection->progress.location_count > 1 ?
-        ((UI0U64)result.next_value *
-         (projection->progress.location_count - 1ull)) / 10000ull : 0;
+      UI0U64 location = result.next_value > 0 ?
+        (UI0U64)result.next_value - 1ull : 0;
       (void)rv_add_action(ctx, ReaderViewAction_SeekLocation, 0, 0,
                           ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                           ReaderViewRightFilter_All, location, rv_text(0, 0));
     }
     rv_add_text_record(ctx, rv_id(403, 0), 0,
                        rv_rect(layout->page_surface_rect.x,
-                               layout->progress_rect.y - 22,
+                               layout->progress_rect.y - 14,
                                layout->page_surface_rect.w,
-                               16),
+                               14),
                        projection->progress.label,
                        ReaderViewSemantic_Status,
                        ReaderViewSemantic_Enabled, 0);
   }
+}
+
+static void
+rv_filter_reference_chrome_draws(RVBuildContext *ctx)
+{
+  UI0S32 write_index = 0;
+  UI0ID previous_id = rv_id(400, 0);
+  UI0ID next_id = rv_id(401, 0);
+  UI0ID progress_id = rv_id(402, 0);
+  UI0ID progress_label_id = rv_id(403, 0);
+  for (UI0S32 read_index = 0;
+       read_index < ctx->draw.command_count;
+       ++read_index)
+  {
+    UI0DrawCommand command = ctx->draw.commands[read_index];
+    UI0B32 gutter_shell =
+      (command.source_id == previous_id || command.source_id == next_id) &&
+      (command.op == UI0DrawOp_ControlFill ||
+       command.op == UI0DrawOp_ControlBorder ||
+       command.op == UI0DrawOp_Text);
+    UI0B32 hidden_progress_thumb = command.source_id == progress_id &&
+      !ctx->progress_thumb_visible &&
+      (command.op == UI0DrawOp_SliderThumb ||
+       command.op == UI0DrawOp_FocusRing);
+    if (gutter_shell || hidden_progress_thumb) continue;
+    if (command.source_id == progress_label_id &&
+        command.op == UI0DrawOp_Text)
+    {
+      command.color = ctx->input->theme->colors[UI0ColorRole_TextMuted];
+    }
+    ctx->draw.commands[write_index++] = command;
+  }
+  ctx->draw.command_count = write_index;
 }
 
 static void
@@ -3241,6 +3312,7 @@ reader_view_build(const ReaderViewBuildInput *input,
                                icon->rect);
     }
   }
+  rv_filter_reference_chrome_draws(&ctx);
 
   if ((ctx.signals.error_flags & UI0SignalError_NoRecordCap) != 0 ||
       (ctx.sliders.error_flags & UI0SliderError_NoRecordCap) != 0 ||
