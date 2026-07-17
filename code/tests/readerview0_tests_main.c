@@ -792,6 +792,29 @@ main(void)
   state.left_panel = ReaderViewLeftPanel_None;
   state.right_panel_open = 0;
 
+  layout_input.bounds = ui0_rect(10, 10, 580, 780);
+  state.left_panel = ReaderViewLeftPanel_Find;
+  state.right_panel_open = 1;
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "minimum-toolbar two-panel host layout resolves");
+  check(rect_equal(layout.left_panel_rect,
+                   ui0_rect(22, 66, 300, 686)) &&
+        rect_equal(layout.right_panel_rect,
+                   ui0_rect(428, 66, 150, 686)) &&
+        rect_equal(layout.viewport_rect, ui0_rect(444, 66, 168, 686)) &&
+        rect_equal(layout.page_surface_rect,
+                   ui0_rect(468, 66, 160, 686)) &&
+        rect_equal(layout.content_rect, ui0_rect(520, 134, 80, 550)) &&
+        rect_equal(layout.progress_rect, ui0_rect(468, 770, 160, 18)),
+        "minimum-toolbar panels preserve the accepted minimum page math");
+  check(rect_equal(layout.previous_gutter_rect,
+                   ui0_rect(330, 66, 138, 686)) &&
+        rect_equal(layout.next_gutter_rect,
+                   ui0_rect(628, 66, 0, 686)),
+        "minimum-toolbar panels preserve bounded old gutter behavior");
+  state.left_panel = ReaderViewLeftPanel_None;
+  state.right_panel_open = 0;
+
   layout_input.bounds = ui0_rect(11, 13, 497, 520);
   layout.bounds = ui0_rect(1, 2, 3, 4);
   check(!reader_view_resolve_layout(&state, &layout_input, &layout) &&

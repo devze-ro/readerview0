@@ -560,22 +560,10 @@ reader_view_resolve_layout(const ReaderViewState *state,
          !rv_rect_contains(result.toolbar_rect,
                            result.host_toolbar_trailing_rect)))) ||
       !rv_rect_contains(result.bounds, result.body_rect) ||
-      !rv_rect_contains(result.body_rect, result.viewport_rect) ||
-      !rv_rect_contains(result.body_rect, result.page_surface_rect) ||
-      !rv_rect_contains(result.page_surface_rect, result.content_rect) ||
       (result.left_panel_visible &&
        !rv_rect_contains(result.body_rect, result.left_panel_rect)) ||
       (result.right_panel_visible &&
-       !rv_rect_contains(result.body_rect, result.right_panel_rect)) ||
-      (paging_visible &&
-       (!rv_rect_contains(result.body_rect, result.previous_gutter_rect) ||
-        !rv_rect_contains(result.body_rect, result.next_gutter_rect) ||
-        !rv_rect_contains(result.previous_gutter_rect,
-                          result.previous_gutter_visual_rect) ||
-        !rv_rect_contains(result.next_gutter_rect,
-                          result.next_gutter_visual_rect))) ||
-      (result.progress_visible &&
-       !rv_rect_contains(result.bounds, result.progress_rect)))
+       !rv_rect_contains(result.body_rect, result.right_panel_rect)))
   {
     return 0;
   }

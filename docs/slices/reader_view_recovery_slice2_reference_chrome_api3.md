@@ -103,6 +103,13 @@ For the 940 by 520 narrow reference with no panel, page and content are
 test locks the old re10 clamped calculation: viewport `(434,56,172,426)`, page
 `(458,56,160,426)`, and content `(510,124,80,290)`.
 
+At the existing 580 by 780 host-reader width with both panels open, API 3 keeps
+the old minimum-page rule instead of rejecting the frame: viewport
+`(444,66,168,686)`, page `(468,66,160,686)`, and content
+`(520,134,80,550)` for bounds `(10,10,580,780)`. The page/progress minimum may
+extend past the residual narrow body after both fixed panel reserves; this is
+the accepted old calculation and keeps every chrome interaction live.
+
 Full screen and distraction-free states atomically hide shared chrome and
 panels before calculating the expanded page. Bounds too small to contain the
 fixed toolbar or the page/content minima fail closed with a zeroed layout.
