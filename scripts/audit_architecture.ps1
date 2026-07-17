@@ -42,12 +42,17 @@ $ReaderViewHeader = Join-Path $Code "reader_view\reader_view.h"
 if (Test-Path -LiteralPath $ReaderViewHeader) {
   $ReaderViewHeaderText = [System.IO.File]::ReadAllText($ReaderViewHeader)
   foreach ($requiredText in @(
+    'READER_VIEW_REFERENCE_TOP_CHROME_HEIGHT',
+    'READER_VIEW_REFERENCE_FOOTER_HEIGHT',
+    'ReaderViewText chrome_title',
+    'UI0Rect page_surface_rect',
+    'UI0Rect content_rect',
     'ReaderViewContentGeometryStyle',
     'ReaderViewContentGeometry',
     'reader_view_default_content_geometry_style',
     'reader_view_resolve_content_geometry'
   )) {
-    if (!$ReaderViewHeaderText.Contains($requiredText)) { $Failures.Add("reader_view.h missing API 2 surface: $requiredText") }
+    if (!$ReaderViewHeaderText.Contains($requiredText)) { $Failures.Add("reader_view.h missing API 3 surface: $requiredText") }
   }
 }
 
@@ -84,6 +89,6 @@ if ($Failures.Count -gt 0) {
   exit 1
 }
 Write-Host "readerview0 architecture audit: pass"
-Write-Host "dependency direction: application -> readerview0 -> UI0 API 90"
+Write-Host "dependency direction: application -> readerview0 API 3 -> UI0 API 91"
 Write-Host "document, persistence, rendering, native accessibility, and product policy: absent"
 exit 0

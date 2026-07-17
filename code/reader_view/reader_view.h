@@ -38,6 +38,12 @@ enum
   READER_VIEW_DEFAULT_CONTENT_INSET_Y = 68,
   READER_VIEW_DEFAULT_CONTENT_MIN_WIDTH = 80,
   READER_VIEW_DEFAULT_CONTENT_MIN_HEIGHT = 48,
+  READER_VIEW_REFERENCE_TOP_CHROME_HEIGHT = 56,
+  READER_VIEW_REFERENCE_FOOTER_HEIGHT = 38,
+  READER_VIEW_REFERENCE_LEFT_PANEL_WIDTH = 420,
+  READER_VIEW_REFERENCE_RIGHT_PANEL_WIDTH = 320,
+  READER_VIEW_REFERENCE_PANEL_INSET = 12,
+  READER_VIEW_REFERENCE_PANEL_PAGE_GAP = 14,
 };
 
 typedef struct ReaderViewText
@@ -341,6 +347,8 @@ typedef struct ReaderViewProjection
   ReaderViewFeatureFlags features;
   ReaderViewDocumentFlags document_flags;
   ReaderViewSurfaceStatus content;
+  /* Portable fixed chrome title; distinct from the host document title. */
+  ReaderViewText chrome_title;
   ReaderViewText document_title;
   ReaderViewKey current_bookmark_key;
   ReaderViewLabels labels;
@@ -485,9 +493,14 @@ typedef struct ReaderViewLayout
   UI0Rect body_rect;
   UI0Rect left_panel_rect;
   UI0Rect right_panel_rect;
+  /* One atomic rendering contract resolved with this layout's panel state. */
   UI0Rect viewport_rect;
+  UI0Rect page_surface_rect;
+  UI0Rect content_rect;
   UI0Rect previous_gutter_rect;
   UI0Rect next_gutter_rect;
+  UI0Rect previous_gutter_visual_rect;
+  UI0Rect next_gutter_visual_rect;
   UI0Rect progress_rect;
 } ReaderViewLayout;
 

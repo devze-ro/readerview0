@@ -131,6 +131,7 @@ rvd_projection_hash(const ReaderViewProjection *projection,
   hash = rvd_hash_u64(hash, projection->features);
   hash = rvd_hash_u64(hash, projection->document_flags);
   hash = rvd_hash_status(hash, projection->content);
+  hash = rvd_hash_text(hash, projection->chrome_title);
   hash = rvd_hash_text(hash, projection->document_title);
   RVD_LABEL(open); RVD_LABEL(previous_page); RVD_LABEL(next_page);
   RVD_LABEL(back); RVD_LABEL(forward); RVD_LABEL(contents); RVD_LABEL(find);
@@ -236,8 +237,10 @@ rvd_layout_hash(const ReaderViewLayout *layout)
   RVD_RECT(bounds); RVD_RECT(toolbar_rect); RVD_RECT(shared_toolbar_rect);
   RVD_RECT(host_toolbar_leading_rect); RVD_RECT(host_toolbar_trailing_rect);
   RVD_RECT(body_rect); RVD_RECT(left_panel_rect); RVD_RECT(right_panel_rect);
-  RVD_RECT(viewport_rect); RVD_RECT(previous_gutter_rect);
-  RVD_RECT(next_gutter_rect); RVD_RECT(progress_rect);
+  RVD_RECT(viewport_rect); RVD_RECT(page_surface_rect); RVD_RECT(content_rect);
+  RVD_RECT(previous_gutter_rect); RVD_RECT(next_gutter_rect);
+  RVD_RECT(previous_gutter_visual_rect); RVD_RECT(next_gutter_visual_rect);
+  RVD_RECT(progress_rect);
 #undef RVD_RECT
 #undef RVD_SCALAR
   return hash;

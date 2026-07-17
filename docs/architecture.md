@@ -4,12 +4,12 @@
 
 Readerview0 owns only proven-common UI0-composed EPUB reader chrome:
 
-- responsive top-toolbar composition and overflow;
+- the fixed accepted top-toolbar composition and responsive containment;
 - left TOC/Find and right annotations/bookmarks panel shells;
 - page gutters, progress geometry, settings and row-action popups, selection
   tools, and the bounded note-editor dialog;
-- allocation-free page-surface and content geometry over a caller-provided
-  central viewport and scalar style;
+- allocation-free atomic page-surface and content geometry in the authoritative
+  layout, plus a standalone caller-provided viewport/scalar-style resolver;
 - deterministic layout, UI0 draw records, text bindings, and portable semantic
   records;
 - caller-owned, fixed-capacity transient interaction state; and
@@ -39,7 +39,7 @@ theme, or hidden mutable reader state.
 The direction is:
 
 ```text
-application -> readerview0 API 2 -> UI0 API 90
+application -> readerview0 API 3 -> UI0 API 91
 ```
 
 Readerview0 source-consumes no lower implementation. The final application
@@ -78,17 +78,27 @@ semantic roles/states. `reader_view_accessibility_focus` and
 state and action path used by pointer and keyboard input.
 
 Applications own native accessibility objects, platform event translation,
-screen-reader announcements, and action execution. API 2 does not redesign
+screen-reader announcements, and action execution. API 3 does not redesign
 either host's native adapter.
 
 ## Central viewport
 
-`ReaderViewLayout.viewport_rect` is the outer application rendering contract.
-`reader_view_resolve_content_geometry` derives the centered page surface and
-inner content rectangle from that viewport. Its default style publishes the
-re10-reference 24 px horizontal reserve, 660/160 px page widths, 52/68 px
-content insets, and 80/48 px content minima. The operation accepts no document
-state and emits no draw command.
+`ReaderViewLayout.viewport_rect`, `page_surface_rect`, and `content_rect` are
+one authoritative application rendering contract computed from the same
+transient panel/chrome state. The accepted geometry is 56 px top chrome, 38 px
+footer, 420/320 px panel widths, 12 px panel inset, and 14 px panel-to-page
+gaps. The default centered page style publishes the re10-reference 24 px
+horizontal reserve, 660/160 px page widths, 52/68 px content insets, and 80/48
+px content minima. `reader_view_resolve_content_geometry` remains as the
+document-free standalone form for an explicit viewport/style; neither path
+emits draw commands.
+
+Loaded toolbar geometry is a fixed twelve-slot row aligned to the right edge:
+eleven shared icon controls in the accepted order, then one host-owned trailing
+slot. Open is an empty-document action only. Visible controls are icon-only,
+while portable semantics keep their accessible names. `chrome_title` is an
+explicit portable projection distinct from `document_title`; readerview0 does
+not substitute the host document title into accepted chrome.
 
 The package may reserve page gutters and overlay/dock panel geometry, but it
 never draws EPUB content or owns document frames, decoded images,

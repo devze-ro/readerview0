@@ -3,11 +3,10 @@
 
 enum
 {
-  RV_TOOLBAR_HEIGHT = 48,
-  RV_PROGRESS_HEIGHT = 38,
-  RV_PANEL_WIDTH = 320,
-  RV_RIGHT_PANEL_WIDTH = 352,
-  RV_GUTTER_WIDTH = 36,
+  RV_TOOLBAR_HEIGHT = READER_VIEW_REFERENCE_TOP_CHROME_HEIGHT,
+  RV_PROGRESS_HEIGHT = READER_VIEW_REFERENCE_FOOTER_HEIGHT,
+  RV_PANEL_WIDTH = READER_VIEW_REFERENCE_LEFT_PANEL_WIDTH,
+  RV_RIGHT_PANEL_WIDTH = READER_VIEW_REFERENCE_RIGHT_PANEL_WIDTH,
   RV_INSET = 12,
   RV_GAP = 8,
   RV_CONTROL_HEIGHT = 32,
@@ -15,7 +14,34 @@ enum
   RV_POPUP_WIDTH = 280,
   RV_NOTE_WIDTH = 512,
   RV_NOTE_HEIGHT = 360,
+  RV_TOOLBAR_CONTROL_WIDTH = 30,
+  RV_TOOLBAR_CONTROL_HEIGHT = 28,
+  RV_TOOLBAR_CONTROL_GAP = 8,
+  RV_TOOLBAR_MAJOR_GAP = 18,
+  RV_TOOLBAR_CONTROL_COUNT = 12,
+  RV_TOOLBAR_SHARED_SLOT_COUNT = 11,
+  RV_TOOLBAR_HORIZONTAL_INSET = 20,
+  RV_TOOLBAR_TOP_INSET = 10,
+  RV_GUTTER_EDGE_INSET = 4,
+  RV_GUTTER_PANEL_GAP = 8,
+  RV_GUTTER_VISUAL_WIDTH = 44,
+  RV_GUTTER_VISUAL_HEIGHT = 88,
+  RV_PROGRESS_BOTTOM_INSET = 20,
+  RV_PROGRESS_HIT_HEIGHT = 18,
+  RV_FONT_POPUP_ANCHOR_X = 86,
+  RV_FONT_POPUP_BODY_WIDTH = 144,
+  RV_FONT_POPUP_GAP = 6,
+  RV_FONT_POPUP_CHOICE_CAP = 5,
+  RV_ICON_RECORD_CAP = 64,
 };
+
+typedef struct RVIconRecord
+{
+  UI0S32 control_index;
+  UI0IconKind icon_kind;
+  UI0Rect rect;
+  UI0B32 visible;
+} RVIconRecord;
 
 typedef struct RVBuildContext
 {
@@ -30,6 +56,8 @@ typedef struct RVBuildContext
   UI0S32 text_count;
   UI0S32 semantic_count;
   UI0S32 action_count;
+  UI0S32 icon_count;
+  RVIconRecord icons[RV_ICON_RECORD_CAP];
   UI0ID toolbar_id;
   UI0ID left_panel_id;
   UI0ID right_panel_id;
@@ -124,6 +152,18 @@ rv_rect(UI0S32 x, UI0S32 y, UI0S32 w, UI0S32 h)
   result.w = rv_max(w, 0);
   result.h = rv_max(h, 0);
   return result;
+}
+
+static UI0B32
+rv_rect_contains(UI0Rect outer, UI0Rect inner)
+{
+  int64_t outer_right = (int64_t)outer.x + outer.w;
+  int64_t outer_bottom = (int64_t)outer.y + outer.h;
+  int64_t inner_right = (int64_t)inner.x + inner.w;
+  int64_t inner_bottom = (int64_t)inner.y + inner.h;
+  return outer.w >= 0 && outer.h >= 0 && inner.w >= 0 && inner.h >= 0 &&
+         inner.x >= outer.x && inner.y >= outer.y &&
+         inner_right <= outer_right && inner_bottom <= outer_bottom;
 }
 
 static UI0B32
@@ -276,17 +316,68 @@ reader_view_accessibility_invoke(ReaderViewState *state, UI0ID semantic_id)
   return 1;
 }
 
+static UI0S32
+rv_toolbar_total_width(void)
+{
+  return RV_TOOLBAR_CONTROL_COUNT * RV_TOOLBAR_CONTROL_WIDTH +
+         (RV_TOOLBAR_CONTROL_COUNT - 2) * RV_TOOLBAR_CONTROL_GAP +
+         RV_TOOLBAR_MAJOR_GAP;
+}
+
+static UI0Rect
+rv_toolbar_slot_rect(const ReaderViewLayout *layout, UI0S32 slot)
+{
+  UI0S32 x;
+  if (!layout || slot < 0 || slot >= RV_TOOLBAR_CONTROL_COUNT ||
+      !layout->toolbar_visible)
+  {
+    return rv_rect(0, 0, 0, 0);
+  }
+  x = layout->shared_toolbar_rect.x +
+      slot * (RV_TOOLBAR_CONTROL_WIDTH + RV_TOOLBAR_CONTROL_GAP);
+  if (slot >= 4) x += RV_TOOLBAR_MAJOR_GAP - RV_TOOLBAR_CONTROL_GAP;
+  return rv_rect(x,
+                 layout->toolbar_rect.y + RV_TOOLBAR_TOP_INSET,
+                 RV_TOOLBAR_CONTROL_WIDTH,
+                 RV_TOOLBAR_CONTROL_HEIGHT);
+}
+
+static UI0Rect
+rv_gutter_visual_rect(UI0Rect hot_rect)
+{
+  UI0S32 width = rv_min(RV_GUTTER_VISUAL_WIDTH, hot_rect.w);
+  UI0S32 height = rv_min(RV_GUTTER_VISUAL_HEIGHT, hot_rect.h);
+  return rv_rect(hot_rect.x + (hot_rect.w - width) / 2,
+                 hot_rect.y + (hot_rect.h - height) / 2,
+                 width,
+                 height);
+}
+
 UI0B32
 reader_view_resolve_layout(const ReaderViewState *state,
                            const ReaderViewLayoutInput *input,
                            ReaderViewLayout *out_layout)
 {
+  enum { RV_REFERENCE_MIN_AVAILABLE_WIDTH = 120 };
   ReaderViewLayout result;
+  ReaderViewContentGeometry geometry;
+  ReaderViewContentGeometryStyle geometry_style;
+  UI0Rect available_rect;
+  UI0B32 chrome_hidden;
+  UI0B32 paging_visible;
+  UI0S32 toolbar_start_x;
   UI0S32 body_y;
   UI0S32 body_h;
-  UI0S32 left_w = 0;
-  UI0S32 right_w = 0;
-  UI0B32 distraction;
+  UI0S32 left_panel_w;
+  UI0S32 right_panel_w;
+  UI0S32 left_reserve;
+  UI0S32 right_reserve;
+  UI0S32 viewport_w;
+  UI0S32 previous_limit;
+  UI0S32 next_limit;
+  int64_t bounds_right;
+  int64_t bounds_bottom;
+  if (out_layout) memset(out_layout, 0, sizeof(*out_layout));
   if (!state || !input || !out_layout || input->bounds.w <= 0 ||
       input->bounds.h <= 0 || input->host_toolbar_leading_width < 0 ||
       input->host_toolbar_trailing_width < 0)
@@ -294,16 +385,45 @@ reader_view_resolve_layout(const ReaderViewState *state,
     return 0;
   }
 
+  bounds_right = (int64_t)input->bounds.x + input->bounds.w;
+  bounds_bottom = (int64_t)input->bounds.y + input->bounds.h;
+  if (!rv_i64_fits_s32(bounds_right) || !rv_i64_fits_s32(bounds_bottom) ||
+      !rv_i64_fits_s32((int64_t)input->bounds.x +
+                       RV_TOOLBAR_HORIZONTAL_INSET +
+                       rv_toolbar_total_width()) ||
+      !rv_i64_fits_s32((int64_t)input->bounds.y + RV_TOOLBAR_HEIGHT))
+  {
+    return 0;
+  }
+
   memset(&result, 0, sizeof(result));
+  memset(&geometry, 0, sizeof(geometry));
   result.bounds = input->bounds;
-  distraction = (input->document_flags &
-                 ReaderViewDocument_DistractionFree) != 0;
-  result.toolbar_visible = !distraction;
-  result.progress_visible = !distraction &&
+  chrome_hidden = (input->document_flags &
+                   (ReaderViewDocument_Fullscreen |
+                    ReaderViewDocument_DistractionFree)) != 0;
+  if ((!chrome_hidden &&
+       (input->bounds.w < rv_toolbar_total_width() +
+                          2 * RV_TOOLBAR_HORIZONTAL_INSET ||
+        input->bounds.h < RV_TOOLBAR_HEIGHT + RV_PROGRESS_HEIGHT +
+                          2 * READER_VIEW_DEFAULT_CONTENT_INSET_Y +
+                          READER_VIEW_DEFAULT_CONTENT_MIN_HEIGHT ||
+        input->host_toolbar_leading_width >
+          input->bounds.w - 2 * RV_TOOLBAR_HORIZONTAL_INSET)) ||
+      (chrome_hidden &&
+       (input->bounds.w < READER_VIEW_DEFAULT_PAGE_MIN_WIDTH ||
+        input->bounds.h < 2 * READER_VIEW_DEFAULT_CONTENT_INSET_Y +
+                          READER_VIEW_DEFAULT_CONTENT_MIN_HEIGHT)))
+  {
+    return 0;
+  }
+  result.toolbar_visible = !chrome_hidden;
+  result.progress_visible = !chrome_hidden &&
     (input->features & ReaderViewFeature_Progress) != 0 &&
     (input->document_flags & ReaderViewDocument_Open) != 0;
-  result.left_panel_visible = !distraction && state->left_panel != ReaderViewLeftPanel_None;
-  result.right_panel_visible = !distraction && state->right_panel_open;
+  result.left_panel_visible = !chrome_hidden &&
+    state->left_panel != ReaderViewLeftPanel_None;
+  result.right_panel_visible = !chrome_hidden && state->right_panel_open;
 
   if (input->bounds.w >= 1180)
     result.mode = ReaderViewLayout_WideDocked;
@@ -311,106 +431,154 @@ reader_view_resolve_layout(const ReaderViewState *state,
     result.mode = ReaderViewLayout_SingleDocked;
   else
     result.mode = ReaderViewLayout_Overlay;
+  result.toolbar_density = ReaderViewToolbar_Compact;
 
-  if (input->bounds.w >= 1024)
-    result.toolbar_density = ReaderViewToolbar_Full;
-  else if (input->bounds.w >= 720)
-    result.toolbar_density = ReaderViewToolbar_Compact;
-  else
-    result.toolbar_density = ReaderViewToolbar_Overflow;
+  result.toolbar_rect = result.toolbar_visible ?
+    rv_rect(input->bounds.x, input->bounds.y, input->bounds.w, RV_TOOLBAR_HEIGHT) :
+    rv_rect(0, 0, 0, 0);
+  toolbar_start_x = rv_max(input->bounds.x + RV_TOOLBAR_HORIZONTAL_INSET,
+                           (UI0S32)bounds_right -
+                           RV_TOOLBAR_HORIZONTAL_INSET -
+                           rv_toolbar_total_width());
+  if (result.toolbar_visible)
+  {
+    result.shared_toolbar_rect = rv_rect(
+      toolbar_start_x,
+      input->bounds.y + RV_TOOLBAR_TOP_INSET,
+      (RV_TOOLBAR_SHARED_SLOT_COUNT - 1) *
+        (RV_TOOLBAR_CONTROL_WIDTH + RV_TOOLBAR_CONTROL_GAP) +
+        (RV_TOOLBAR_MAJOR_GAP - RV_TOOLBAR_CONTROL_GAP) +
+        RV_TOOLBAR_CONTROL_WIDTH,
+      RV_TOOLBAR_CONTROL_HEIGHT);
+    result.host_toolbar_leading_rect = rv_rect(
+      input->bounds.x + RV_TOOLBAR_HORIZONTAL_INSET,
+      input->bounds.y + RV_TOOLBAR_TOP_INSET,
+      input->host_toolbar_leading_width,
+      RV_TOOLBAR_CONTROL_HEIGHT);
+    if (input->host_toolbar_trailing_width > 0)
+      result.host_toolbar_trailing_rect = rv_toolbar_slot_rect(
+        &result, RV_TOOLBAR_CONTROL_COUNT - 1);
+  }
 
-  result.toolbar_rect = rv_rect(input->bounds.x,
-                                input->bounds.y,
-                                input->bounds.w,
-                                result.toolbar_visible ? RV_TOOLBAR_HEIGHT : 0);
-  result.host_toolbar_leading_rect = rv_rect(result.toolbar_rect.x + RV_INSET,
-                                             result.toolbar_rect.y + RV_GAP,
-                                             input->host_toolbar_leading_width,
-                                             RV_CONTROL_HEIGHT);
-  result.host_toolbar_trailing_rect = rv_rect(result.toolbar_rect.x + result.toolbar_rect.w -
-                                               RV_INSET - input->host_toolbar_trailing_width,
-                                               result.toolbar_rect.y + RV_GAP,
-                                               input->host_toolbar_trailing_width,
-                                               RV_CONTROL_HEIGHT);
-  result.shared_toolbar_rect = rv_rect(result.host_toolbar_leading_rect.x +
-                                        result.host_toolbar_leading_rect.w,
-                                        result.toolbar_rect.y + RV_GAP,
-                                        result.host_toolbar_trailing_rect.x -
-                                        (result.host_toolbar_leading_rect.x +
-                                         result.host_toolbar_leading_rect.w),
-                                        RV_CONTROL_HEIGHT);
-
-  body_y = input->bounds.y + result.toolbar_rect.h;
-  body_h = input->bounds.h - result.toolbar_rect.h -
-    (result.progress_visible ? RV_PROGRESS_HEIGHT : 0);
+  body_y = chrome_hidden ? input->bounds.y :
+    input->bounds.y + RV_TOOLBAR_HEIGHT;
+  body_h = chrome_hidden ? input->bounds.h :
+    rv_max(96, input->bounds.h - RV_TOOLBAR_HEIGHT - RV_PROGRESS_HEIGHT);
+  if (!rv_i64_fits_s32((int64_t)body_y + body_h)) return 0;
   result.body_rect = rv_rect(input->bounds.x, body_y, input->bounds.w, body_h);
-  result.progress_rect = rv_rect(input->bounds.x,
-                                 body_y + body_h,
-                                 input->bounds.w,
-                                 result.progress_visible ? RV_PROGRESS_HEIGHT : 0);
 
-  if (result.mode == ReaderViewLayout_WideDocked)
+  left_panel_w = rv_min(RV_PANEL_WIDTH, rv_max(300, input->bounds.w / 3));
+  right_panel_w = rv_min(RV_RIGHT_PANEL_WIDTH, rv_max(150, input->bounds.w / 4));
+  if (result.left_panel_visible)
+    result.left_panel_rect = rv_rect(
+      input->bounds.x + READER_VIEW_REFERENCE_PANEL_INSET,
+      body_y,
+      left_panel_w,
+      body_h);
+  if (result.right_panel_visible)
+    result.right_panel_rect = rv_rect(
+      (UI0S32)bounds_right - right_panel_w -
+        READER_VIEW_REFERENCE_PANEL_INSET,
+      body_y,
+      right_panel_w,
+      body_h);
+
+  left_reserve = result.left_panel_visible ?
+    RV_PANEL_WIDTH + READER_VIEW_REFERENCE_PANEL_PAGE_GAP : 0;
+  right_reserve = result.right_panel_visible ?
+    RV_RIGHT_PANEL_WIDTH + READER_VIEW_REFERENCE_PANEL_PAGE_GAP : 0;
+  viewport_w = rv_max(2 * READER_VIEW_DEFAULT_PAGE_HORIZONTAL_INSET +
+                      RV_REFERENCE_MIN_AVAILABLE_WIDTH,
+                      input->bounds.w - left_reserve - right_reserve);
+  result.viewport_rect = rv_rect(input->bounds.x + left_reserve,
+                                 body_y,
+                                 viewport_w,
+                                 body_h);
+  geometry_style = reader_view_default_content_geometry_style();
+  geometry_style.page_horizontal_inset = 0;
+  available_rect = rv_rect(input->bounds.x + left_reserve +
+                             READER_VIEW_DEFAULT_PAGE_HORIZONTAL_INSET,
+                           body_y,
+                           rv_max(RV_REFERENCE_MIN_AVAILABLE_WIDTH,
+                                  input->bounds.w - left_reserve -
+                                    right_reserve -
+                                    2 * READER_VIEW_DEFAULT_PAGE_HORIZONTAL_INSET),
+                           body_h);
+  if (!reader_view_resolve_content_geometry(available_rect,
+                                            &geometry_style,
+                                            &geometry))
   {
-    if (result.left_panel_visible) left_w = rv_min(RV_PANEL_WIDTH, input->bounds.w / 3);
-    if (result.right_panel_visible) right_w = rv_min(RV_RIGHT_PANEL_WIDTH, input->bounds.w / 3);
+    return 0;
   }
-  else if (result.mode == ReaderViewLayout_SingleDocked)
+  result.page_surface_rect = geometry.page_surface_rect;
+  result.content_rect = geometry.content_rect;
+
+  paging_visible = (input->features & ReaderViewFeature_Paging) != 0 &&
+    (input->document_flags & ReaderViewDocument_Open) != 0;
+  result.previous_gutter_visible = paging_visible;
+  result.next_gutter_visible = paging_visible;
+  if (paging_visible)
   {
-    if (result.left_panel_visible && result.right_panel_visible)
-    {
-      if (state->most_recent_panel == ReaderViewPanel_Right)
-      {
-        right_w = RV_RIGHT_PANEL_WIDTH;
-        result.left_panel_overlay = 1;
-      }
-      else
-      {
-        left_w = RV_PANEL_WIDTH;
-        result.right_panel_overlay = 1;
-      }
-    }
-    else if (result.left_panel_visible) left_w = RV_PANEL_WIDTH;
-    else if (result.right_panel_visible) right_w = RV_RIGHT_PANEL_WIDTH;
-  }
-  else
-  {
-    result.left_panel_overlay = result.left_panel_visible;
-    result.right_panel_overlay = result.right_panel_visible;
+    previous_limit = input->bounds.x + RV_GUTTER_EDGE_INSET;
+    if (result.left_panel_visible)
+      previous_limit = rv_max(previous_limit,
+                              result.left_panel_rect.x +
+                              result.left_panel_rect.w +
+                              RV_GUTTER_PANEL_GAP);
+    next_limit = (UI0S32)bounds_right - RV_GUTTER_EDGE_INSET;
+    if (result.right_panel_visible)
+      next_limit = rv_min(next_limit,
+                          result.right_panel_rect.x - RV_GUTTER_PANEL_GAP);
+    result.previous_gutter_rect = rv_rect(
+      previous_limit,
+      result.page_surface_rect.y,
+      result.page_surface_rect.x - previous_limit,
+      result.page_surface_rect.h);
+    result.next_gutter_rect = rv_rect(
+      result.page_surface_rect.x + result.page_surface_rect.w,
+      result.page_surface_rect.y,
+      next_limit - (result.page_surface_rect.x + result.page_surface_rect.w),
+      result.page_surface_rect.h);
+    result.previous_gutter_visual_rect =
+      rv_gutter_visual_rect(result.previous_gutter_rect);
+    result.next_gutter_visual_rect =
+      rv_gutter_visual_rect(result.next_gutter_rect);
   }
 
-  result.viewport_rect = rv_rect(result.body_rect.x + left_w,
-                                 result.body_rect.y,
-                                 result.body_rect.w - left_w - right_w,
-                                 result.body_rect.h);
-  result.left_panel_rect = rv_rect(result.body_rect.x,
-                                   result.body_rect.y,
-                                   result.left_panel_visible ?
-                                     rv_min(RV_PANEL_WIDTH, result.body_rect.w - 48) : 0,
-                                   result.body_rect.h);
-  result.right_panel_rect = rv_rect(result.body_rect.x + result.body_rect.w -
-                                    (result.right_panel_visible ?
-                                      rv_min(RV_RIGHT_PANEL_WIDTH, result.body_rect.w - 48) : 0),
-                                    result.body_rect.y,
-                                    result.right_panel_visible ?
-                                      rv_min(RV_RIGHT_PANEL_WIDTH, result.body_rect.w - 48) : 0,
-                                    result.body_rect.h);
-  if (result.left_panel_overlay) result.left_panel_rect.x = result.body_rect.x;
-  if (result.right_panel_overlay)
-    result.right_panel_rect.x = result.body_rect.x + result.body_rect.w - result.right_panel_rect.w;
-
-  result.previous_gutter_visible = (input->features & ReaderViewFeature_Paging) != 0 &&
-    (input->document_flags & ReaderViewDocument_Open) != 0 &&
-    result.viewport_rect.w >= RV_GUTTER_WIDTH * 2;
-  result.next_gutter_visible = result.previous_gutter_visible;
-  result.previous_gutter_rect = rv_rect(result.viewport_rect.x,
-                                        result.viewport_rect.y,
-                                        result.previous_gutter_visible ? RV_GUTTER_WIDTH : 0,
-                                        result.viewport_rect.h);
-  result.next_gutter_rect = rv_rect(result.viewport_rect.x + result.viewport_rect.w -
-                                    (result.next_gutter_visible ? RV_GUTTER_WIDTH : 0),
-                                    result.viewport_rect.y,
-                                    result.next_gutter_visible ? RV_GUTTER_WIDTH : 0,
-                                    result.viewport_rect.h);
+  if (result.progress_visible)
+    result.progress_rect = rv_rect(result.page_surface_rect.x,
+                                   (UI0S32)bounds_bottom -
+                                     RV_PROGRESS_BOTTOM_INSET,
+                                   result.page_surface_rect.w,
+                                   RV_PROGRESS_HIT_HEIGHT);
+  if ((result.toolbar_visible &&
+       (!rv_rect_contains(result.bounds, result.toolbar_rect) ||
+        !rv_rect_contains(result.toolbar_rect, result.shared_toolbar_rect) ||
+        !rv_rect_contains(result.toolbar_rect,
+                          result.host_toolbar_leading_rect) ||
+        (input->host_toolbar_trailing_width > 0 &&
+         !rv_rect_contains(result.toolbar_rect,
+                           result.host_toolbar_trailing_rect)))) ||
+      !rv_rect_contains(result.bounds, result.body_rect) ||
+      !rv_rect_contains(result.body_rect, result.viewport_rect) ||
+      !rv_rect_contains(result.body_rect, result.page_surface_rect) ||
+      !rv_rect_contains(result.page_surface_rect, result.content_rect) ||
+      (result.left_panel_visible &&
+       !rv_rect_contains(result.body_rect, result.left_panel_rect)) ||
+      (result.right_panel_visible &&
+       !rv_rect_contains(result.body_rect, result.right_panel_rect)) ||
+      (paging_visible &&
+       (!rv_rect_contains(result.body_rect, result.previous_gutter_rect) ||
+        !rv_rect_contains(result.body_rect, result.next_gutter_rect) ||
+        !rv_rect_contains(result.previous_gutter_rect,
+                          result.previous_gutter_visual_rect) ||
+        !rv_rect_contains(result.next_gutter_rect,
+                          result.next_gutter_visual_rect))) ||
+      (result.progress_visible &&
+       !rv_rect_contains(result.bounds, result.progress_rect)))
+  {
+    return 0;
+  }
   *out_layout = result;
   return 1;
 }
@@ -579,6 +747,7 @@ rv_validate_projection(const ReaderViewProjection *projection)
 
   memset(setting_seen, 0, sizeof(setting_seen));
   rv_validate_status(projection->content, &errors);
+  rv_validate_text(projection->chrome_title, &errors);
   rv_validate_text(projection->document_title, &errors);
   rv_validate_status(projection->progress.status, &errors);
   rv_validate_text(projection->progress.chapter, &errors);
@@ -949,21 +1118,22 @@ rv_add_surface(RVBuildContext *ctx,
 }
 
 static UI0B32
-rv_add_control(RVBuildContext *ctx,
-               UI0ID id,
-               UI0ID parent_id,
-               UI0ControlKind kind,
-               ReaderViewSemanticRole role,
-               UI0RootKind root,
-               UI0Rect rect,
-               ReaderViewText label,
-               ReaderViewText value,
-               ReaderViewKey source_key,
-               UI0B32 enabled,
-               UI0B32 selected,
-               UI0B32 checked,
-               UI0B32 open,
-               UI0B32 destructive)
+rv_add_control_with_hit_rect(RVBuildContext *ctx,
+                             UI0ID id,
+                             UI0ID parent_id,
+                             UI0ControlKind kind,
+                             ReaderViewSemanticRole role,
+                             UI0RootKind root,
+                             UI0Rect rect,
+                             UI0Rect hit_rect,
+                             ReaderViewText label,
+                             ReaderViewText value,
+                             ReaderViewKey source_key,
+                             UI0B32 enabled,
+                             UI0B32 selected,
+                             UI0B32 checked,
+                             UI0B32 open,
+                             UI0B32 destructive)
 {
   UI0SignalRectSpec signal_spec;
   UI0Signal signal;
@@ -976,7 +1146,7 @@ rv_add_control(RVBuildContext *ctx,
   signal_spec.flags = UI0SignalBox_Clickable | UI0SignalBox_Focusable;
   if (!enabled) signal_spec.flags |= UI0SignalBox_Disabled;
   signal_spec.rect = rect;
-  signal_spec.hit_rect = rect;
+  signal_spec.hit_rect = hit_rect;
   signal = ui0_signal_from_rect(&ctx->signals, signal_spec);
 
   if (!enabled) control_flags |= UI0Control_Disabled;
@@ -1032,6 +1202,104 @@ rv_add_control(RVBuildContext *ctx,
             ctx->input->state->pending_accessibility_invoke_id == id;
   if (ctx->input->state->pending_accessibility_invoke_id == id)
     ctx->input->state->pending_accessibility_invoke_id = 0;
+  return invoked;
+}
+
+static UI0B32
+rv_add_control(RVBuildContext *ctx,
+               UI0ID id,
+               UI0ID parent_id,
+               UI0ControlKind kind,
+               ReaderViewSemanticRole role,
+               UI0RootKind root,
+               UI0Rect rect,
+               ReaderViewText label,
+               ReaderViewText value,
+               ReaderViewKey source_key,
+               UI0B32 enabled,
+               UI0B32 selected,
+               UI0B32 checked,
+               UI0B32 open,
+               UI0B32 destructive)
+{
+  return rv_add_control_with_hit_rect(ctx,
+                                      id,
+                                      parent_id,
+                                      kind,
+                                      role,
+                                      root,
+                                      rect,
+                                      rect,
+                                      label,
+                                      value,
+                                      source_key,
+                                      enabled,
+                                      selected,
+                                      checked,
+                                      open,
+                                      destructive);
+}
+
+static UI0B32
+rv_add_icon_control(RVBuildContext *ctx,
+                    UI0ID id,
+                    UI0ID parent_id,
+                    UI0ControlKind kind,
+                    ReaderViewSemanticRole role,
+                    UI0RootKind root,
+                    UI0Rect rect,
+                    UI0Rect hit_rect,
+                    ReaderViewText label,
+                    ReaderViewText value,
+                    ReaderViewKey source_key,
+                    UI0B32 enabled,
+                    UI0B32 selected,
+                    UI0B32 checked,
+                    UI0B32 open,
+                    UI0B32 destructive,
+                    UI0IconKind icon_kind,
+                    UI0Rect icon_rect,
+                    UI0B32 icon_visible)
+{
+  UI0S32 control_index = ctx->control_count;
+  UI0B32 invoked = rv_add_control_with_hit_rect(ctx,
+                                                id,
+                                                parent_id,
+                                                kind,
+                                                role,
+                                                root,
+                                                rect,
+                                                hit_rect,
+                                                label,
+                                                value,
+                                                source_key,
+                                                enabled,
+                                                selected,
+                                                checked,
+                                                open,
+                                                destructive);
+  if (ctx->control_count > control_index)
+  {
+    UI0ControlRecord *record = ctx->storage->control_records + control_index;
+    record->text_rect = rv_rect(0, 0, 0, 0);
+    record->label_hash = 0;
+    record->label_len = 0;
+    if (icon_kind != UI0IconKind_None)
+    {
+      if (ctx->icon_count >= RV_ICON_RECORD_CAP)
+      {
+        ctx->frame->error_flags |= ReaderViewFrameError_RecordCap;
+      }
+      else
+      {
+        RVIconRecord *icon = ctx->icons + ctx->icon_count++;
+        icon->control_index = control_index;
+        icon->icon_kind = icon_kind;
+        icon->rect = icon_rect;
+        icon->visible = icon_visible;
+      }
+    }
+  }
   return invoked;
 }
 
@@ -1380,29 +1648,88 @@ rv_activate_setting(RVBuildContext *ctx,
                         rv_text(0, 0));
 }
 
+static UI0Rect
+rv_toolbar_icon_rect(UI0Rect rect)
+{
+  UI0S32 size = rv_clamp(rv_min(rect.w, rect.h) - 10, 16, 18);
+  return rv_rect(rect.x + (rect.w - size) / 2,
+                 rect.y + (rect.h - size) / 2,
+                 size,
+                 size);
+}
+
+static UI0B32
+rv_toolbar_icon_control(RVBuildContext *ctx,
+                        UI0U64 tag,
+                        UI0S32 slot,
+                        ReaderViewText label,
+                        ReaderViewText value,
+                        UI0B32 enabled,
+                        UI0B32 selected,
+                        UI0B32 checked,
+                        UI0B32 open,
+                        UI0IconKind icon_kind)
+{
+  UI0Rect rect = rv_toolbar_slot_rect(ctx->input->layout, slot);
+  return rv_add_icon_control(ctx,
+                             rv_id(tag, 0),
+                             ctx->toolbar_id,
+                             UI0ControlKind_ToolbarItem,
+                             ReaderViewSemantic_Button,
+                             UI0RootKind_Normal,
+                             rect,
+                             rect,
+                             label,
+                             value,
+                             0,
+                             enabled,
+                             selected,
+                             checked,
+                             open,
+                             0,
+                             icon_kind,
+                             rv_toolbar_icon_rect(rect),
+                             1);
+}
+
+static void
+rv_build_toolbar_setting(RVBuildContext *ctx,
+                         ReaderViewLabels labels,
+                         ReaderViewSettingKind kind,
+                         UI0S32 slot,
+                         UI0IconKind icon_kind)
+{
+  const ReaderViewSettingControl *setting =
+    rv_find_setting(ctx->input->projection, kind);
+  UI0ID id;
+  ReaderViewText label;
+  if (!setting) return;
+  id = rv_id(30 + (UI0U64)kind, 0);
+  label = setting->label.size ? setting->label : labels.reading_settings;
+  if (rv_toolbar_icon_control(
+        ctx,
+        30 + (UI0U64)kind,
+        slot,
+        label,
+        rv_selected_choice_label(&setting->choices),
+        setting->status.state == ReaderViewLoad_Ready,
+        0,
+        0,
+        ctx->input->state->popup == ReaderViewPopup_SettingMenu &&
+          ctx->input->state->active_setting_kind == kind,
+        icon_kind))
+  {
+    rv_activate_setting(ctx, setting, id);
+  }
+}
+
 static void
 rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
 {
   const ReaderViewProjection *projection = ctx->input->projection;
   const ReaderViewLayout *layout = ctx->input->layout;
-  ReaderViewToolbarDensity density = layout->toolbar_density;
-  UI0S32 slot_count = 0;
-  UI0S32 slot = 0;
-  UI0ID id;
-  UI0B32 full = density == ReaderViewToolbar_Full;
-  UI0B32 compact = density == ReaderViewToolbar_Compact;
-  UI0B32 show_open = rv_has_feature(projection, ReaderViewFeature_Open);
-  UI0B32 show_contents = rv_has_feature(projection, ReaderViewFeature_Contents);
-  UI0B32 show_find = rv_has_feature(projection, ReaderViewFeature_Find);
-  UI0B32 show_history = rv_has_feature(projection, ReaderViewFeature_History) && full;
-  UI0B32 show_settings = rv_has_feature(projection, ReaderViewFeature_ReadingSettings) && full;
-  UI0B32 show_bookmark = rv_has_feature(projection, ReaderViewFeature_Bookmark) &&
-                         (full || compact);
-  UI0B32 show_right = rv_has_feature(projection, ReaderViewFeature_Annotations) && full;
-  UI0B32 show_fullscreen = rv_has_feature(projection, ReaderViewFeature_Fullscreen) && full;
-  UI0B32 show_distraction = rv_has_feature(projection, ReaderViewFeature_DistractionFree) && full;
-  UI0B32 show_more = !full;
-  UI0S32 setting_index;
+  UI0B32 document_open = rv_has_document_flag(
+    projection, ReaderViewDocument_Open);
 
   if (!layout->toolbar_visible || layout->shared_toolbar_rect.w <= 0) return;
   ctx->toolbar_id = rv_id(1, 0);
@@ -1412,145 +1739,164 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
                        UI0RootKind_Normal,
                        layout->toolbar_rect,
                        rv_literal("Reader toolbar"));
-  slot_count += show_open + show_contents + show_find + show_history * 2;
-  slot_count += show_settings ? projection->settings.count : 0;
-  slot_count += show_bookmark + show_right + show_fullscreen + show_distraction;
-  slot_count += show_more;
-  if (slot_count <= 0) return;
-
-#define RV_TOOL_CONTROL(tag, label, enabled, selected, checked, open) \
-  rv_add_control(ctx, rv_id((tag), 0), ctx->toolbar_id, \
-                 UI0ControlKind_ToolbarItem, ReaderViewSemantic_Button, \
-                 UI0RootKind_Normal, \
-                 rv_toolbar_slot(layout->shared_toolbar_rect, slot++, slot_count), \
-                 (label), rv_text(0, 0), 0, (enabled), (selected), (checked), \
-                 (open), 0)
-  if (show_open)
+  if (document_open && projection->chrome_title.size > 0)
   {
-    if (RV_TOOL_CONTROL(10, labels.open,
-                        rv_has_document_flag(projection, ReaderViewDocument_CanOpen),
-                        0, 0, 0))
+    rv_add_text_record(ctx,
+                       rv_id(2, 0),
+                       ctx->toolbar_id,
+                       rv_rect(layout->bounds.x + 20,
+                               layout->bounds.y + 14,
+                               180,
+                               22),
+                       projection->chrome_title,
+                       ReaderViewSemantic_Group,
+                       ReaderViewSemantic_Enabled,
+                       0);
+  }
+
+  if (!document_open)
+  {
+    if (rv_has_feature(projection, ReaderViewFeature_Open) &&
+        rv_toolbar_icon_control(
+          ctx, 10, 0, labels.open, rv_text(0, 0),
+          rv_has_document_flag(projection, ReaderViewDocument_CanOpen),
+          0, 0, 0, UI0IconKind_BookOpen))
+    {
       (void)rv_add_action(ctx, ReaderViewAction_Open, 0, 0,
                           ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                           ReaderViewRightFilter_All, 0, rv_text(0, 0));
+    }
+    return;
   }
-  if (show_contents)
+
+  if (rv_has_feature(projection, ReaderViewFeature_Contents) &&
+      rv_toolbar_icon_control(
+        ctx, 11, 0, labels.contents, rv_text(0, 0), 1,
+        ctx->input->state->left_panel == ReaderViewLeftPanel_Contents,
+        ctx->input->state->left_panel == ReaderViewLeftPanel_Contents,
+        ctx->input->state->left_panel == ReaderViewLeftPanel_Contents,
+        UI0IconKind_List))
   {
-    if (RV_TOOL_CONTROL(11, labels.contents, 1,
-                        ctx->input->state->left_panel == ReaderViewLeftPanel_Contents,
-                        ctx->input->state->left_panel == ReaderViewLeftPanel_Contents,
-                        ctx->input->state->left_panel == ReaderViewLeftPanel_Contents))
-      rv_toggle_left_panel(ctx, ReaderViewLeftPanel_Contents);
+    rv_toggle_left_panel(ctx, ReaderViewLeftPanel_Contents);
   }
-  if (show_find)
+  if (rv_has_feature(projection, ReaderViewFeature_Find) &&
+      rv_toolbar_icon_control(
+        ctx, 12, 1, labels.find, rv_text(0, 0), 1,
+        ctx->input->state->left_panel == ReaderViewLeftPanel_Find,
+        ctx->input->state->left_panel == ReaderViewLeftPanel_Find,
+        ctx->input->state->left_panel == ReaderViewLeftPanel_Find,
+        UI0IconKind_Search))
   {
-    if (RV_TOOL_CONTROL(12, labels.find, 1,
-                        ctx->input->state->left_panel == ReaderViewLeftPanel_Find,
-                        ctx->input->state->left_panel == ReaderViewLeftPanel_Find,
-                        ctx->input->state->left_panel == ReaderViewLeftPanel_Find))
-      rv_toggle_left_panel(ctx, ReaderViewLeftPanel_Find);
+    rv_toggle_left_panel(ctx, ReaderViewLeftPanel_Find);
   }
-  if (show_history)
+  if (rv_has_feature(projection, ReaderViewFeature_History))
   {
-    if (RV_TOOL_CONTROL(13, labels.back,
-                        rv_has_document_flag(projection, ReaderViewDocument_CanGoBack),
-                        0, 0, 0))
+    if (rv_toolbar_icon_control(
+          ctx, 13, 2, labels.back, rv_text(0, 0),
+          rv_has_document_flag(projection, ReaderViewDocument_CanGoBack),
+          0, 0, 0, UI0IconKind_ArrowLeft))
       (void)rv_add_action(ctx, ReaderViewAction_HistoryBack, 0, 0,
                           ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                           ReaderViewRightFilter_All, 0, rv_text(0, 0));
-    if (RV_TOOL_CONTROL(14, labels.forward,
-                        rv_has_document_flag(projection, ReaderViewDocument_CanGoForward),
-                        0, 0, 0))
+    if (rv_toolbar_icon_control(
+          ctx, 14, 3, labels.forward, rv_text(0, 0),
+          rv_has_document_flag(projection, ReaderViewDocument_CanGoForward),
+          0, 0, 0, UI0IconKind_ArrowRight))
       (void)rv_add_action(ctx, ReaderViewAction_HistoryForward, 0, 0,
                           ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                           ReaderViewRightFilter_All, 0, rv_text(0, 0));
   }
-  if (show_distraction)
+
+  if (rv_has_feature(projection, ReaderViewFeature_Fullscreen))
   {
-    if (RV_TOOL_CONTROL(15, labels.distraction_free,
-                        rv_has_document_flag(projection,
-                          ReaderViewDocument_CanToggleDistraction),
-                        0,
-                        rv_has_document_flag(projection,
-                          ReaderViewDocument_DistractionFree), 0))
-      (void)rv_add_action(ctx, ReaderViewAction_ToggleDistractionFree, 0, 0,
-                          ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
-                          ReaderViewRightFilter_All, 0, rv_text(0, 0));
-  }
-  if (show_fullscreen)
-  {
-    ReaderViewText fullscreen_label = rv_has_document_flag(
-      projection, ReaderViewDocument_Fullscreen) ?
+    UI0B32 fullscreen = rv_has_document_flag(
+      projection, ReaderViewDocument_Fullscreen);
+    ReaderViewText fullscreen_label = fullscreen ?
       labels.exit_fullscreen : labels.fullscreen;
-    if (RV_TOOL_CONTROL(16, fullscreen_label,
-                        rv_has_document_flag(projection,
-                          ReaderViewDocument_CanToggleFullscreen),
-                        0,
-                        rv_has_document_flag(projection,
-                          ReaderViewDocument_Fullscreen), 0))
+    if (rv_toolbar_icon_control(
+          ctx, 16, 4, fullscreen_label, rv_text(0, 0),
+          rv_has_document_flag(projection,
+            ReaderViewDocument_CanToggleFullscreen),
+          fullscreen, fullscreen, 0,
+          fullscreen ? UI0IconKind_Shrink : UI0IconKind_Expand))
       (void)rv_add_action(ctx, ReaderViewAction_ToggleFullscreen, 0, 0,
                           ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                           ReaderViewRightFilter_All, 0, rv_text(0, 0));
   }
-  if (show_right)
+  else if (rv_has_feature(projection, ReaderViewFeature_DistractionFree))
   {
-    if (RV_TOOL_CONTROL(17, labels.annotations, 1,
-                        ctx->input->state->right_panel_open,
-                        ctx->input->state->right_panel_open,
-                        ctx->input->state->right_panel_open))
-      rv_toggle_right_panel(ctx);
+    UI0B32 active = rv_has_document_flag(
+      projection, ReaderViewDocument_DistractionFree);
+    if (rv_toolbar_icon_control(
+          ctx, 15, 4, labels.distraction_free, rv_text(0, 0),
+          rv_has_document_flag(projection,
+            ReaderViewDocument_CanToggleDistraction),
+          active, active, 0,
+          active ? UI0IconKind_Shrink : UI0IconKind_Expand))
+      (void)rv_add_action(ctx, ReaderViewAction_ToggleDistractionFree, 0, 0,
+                          ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
+                          ReaderViewRightFilter_All, 0, rv_text(0, 0));
   }
-  if (show_settings)
+
+  if (rv_has_feature(projection, ReaderViewFeature_ReadingSettings))
   {
-    for (setting_index = 0; setting_index < projection->settings.count; ++setting_index)
-    {
-      const ReaderViewSettingControl *setting = projection->settings.items + setting_index;
-      ReaderViewText setting_label = setting->label.size ? setting->label :
-                                     labels.reading_settings;
-      id = rv_id(30 + (UI0U64)setting->kind, 0);
-      if (rv_add_control(ctx, id, ctx->toolbar_id,
-                         UI0ControlKind_ToolbarItem,
-                         ReaderViewSemantic_Button,
-                         UI0RootKind_Normal,
-                         rv_toolbar_slot(layout->shared_toolbar_rect,
-                                         slot++, slot_count),
-                         setting_label,
-                         rv_selected_choice_label(&setting->choices),
-                         0,
-                         setting->status.state == ReaderViewLoad_Ready,
-                         0, 0,
-                         ctx->input->state->popup == ReaderViewPopup_SettingMenu &&
-                         ctx->input->state->active_setting_kind == setting->kind,
-                         0))
-        rv_activate_setting(ctx, setting, id);
-    }
+    rv_build_toolbar_setting(ctx, labels, ReaderViewSetting_FontSize,
+                             5, UI0IconKind_TextSize);
+    rv_build_toolbar_setting(ctx, labels, ReaderViewSetting_LineSpacing,
+                             6, UI0IconKind_LineSpacing);
+    rv_build_toolbar_setting(ctx, labels, ReaderViewSetting_FontFamily,
+                             7, UI0IconKind_CaseSensitive);
+    rv_build_toolbar_setting(ctx, labels, ReaderViewSetting_Theme,
+                             8, UI0IconKind_SunMoon);
   }
-  if (show_bookmark)
+
+  if (rv_has_feature(projection, ReaderViewFeature_Annotations) &&
+      rv_toolbar_icon_control(
+        ctx, 17, 9, labels.annotations, rv_text(0, 0), 1,
+        ctx->input->state->right_panel_open,
+        ctx->input->state->right_panel_open,
+        ctx->input->state->right_panel_open,
+        UI0IconKind_Notebook))
+  {
+    rv_toggle_right_panel(ctx);
+  }
+
+  if (rv_has_feature(projection, ReaderViewFeature_Bookmark))
   {
     UI0B32 bookmarked = rv_has_document_flag(
       projection, ReaderViewDocument_CurrentBookmarked);
-    if (RV_TOOL_CONTROL(18,
-                        bookmarked ? labels.remove_bookmark : labels.bookmark,
-                        rv_has_document_flag(projection, ReaderViewDocument_Open),
-                        0, bookmarked, 0))
+    if (rv_toolbar_icon_control(
+          ctx, 18, 10,
+          bookmarked ? labels.remove_bookmark : labels.bookmark,
+          rv_text(0, 0), 1, bookmarked, bookmarked, 0,
+          UI0IconKind_Bookmark))
       (void)rv_add_action(ctx, ReaderViewAction_ToggleBookmark,
                           projection->current_bookmark_key, 0,
                           ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                           ReaderViewRightFilter_All, 0, rv_text(0, 0));
   }
-  if (show_more)
-  {
-    if (RV_TOOL_CONTROL(19, labels.more, 1, 0, 0,
-                        ctx->input->state->popup == ReaderViewPopup_Overflow))
-    {
-      ctx->input->state->popup =
-        ctx->input->state->popup == ReaderViewPopup_Overflow ?
-          ReaderViewPopup_None : ReaderViewPopup_Overflow;
-      ctx->input->state->restore_focus_id = rv_id(19, 0);
-      ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
-    }
-  }
-#undef RV_TOOL_CONTROL
+}
+
+static UI0Rect
+rv_font_popup_rect(const ReaderViewBuildInput *input,
+                   const ReaderViewSettingControl *setting)
+{
+  UI0MenuStyle style = ui0_menu_style_from_resolved(input->theme);
+  UI0Rect font_rect = rv_toolbar_slot_rect(input->layout, 7);
+  UI0S32 body_padding_left = ui0_flat_row_popup_body_padding_left(
+    style.popup_padding_right,
+    UI0FlatRowIndicator_DefaultWidth,
+    UI0FlatRowIndicator_DefaultGap);
+  UI0S32 row_count = setting ?
+    rv_min(setting->choices.count, RV_FONT_POPUP_CHOICE_CAP) : 0;
+  row_count = rv_max(row_count, 1);
+  return rv_rect(font_rect.x - RV_FONT_POPUP_ANCHOR_X - body_padding_left,
+                 font_rect.y + font_rect.h + RV_FONT_POPUP_GAP,
+                 RV_FONT_POPUP_BODY_WIDTH + body_padding_left +
+                   style.popup_padding_right,
+                 style.popup_padding_y * 2 +
+                   row_count * style.row_height +
+                   (row_count - 1) * style.row_gap);
 }
 
 static UI0Rect
@@ -1559,8 +1905,15 @@ rv_popup_rect(const ReaderViewBuildInput *input)
   const ReaderViewState *state = input->state;
   UI0Rect bounds = input->layout->bounds;
   UI0Rect result = rv_centered_rect(bounds, RV_POPUP_WIDTH, 300);
-  if (state->popup == ReaderViewPopup_SettingMenu ||
-      state->popup == ReaderViewPopup_Overflow)
+  if (state->popup == ReaderViewPopup_SettingMenu &&
+      state->active_setting_kind == ReaderViewSetting_FontFamily)
+  {
+    result = rv_font_popup_rect(
+      input,
+      rv_find_setting(input->projection, ReaderViewSetting_FontFamily));
+  }
+  else if (state->popup == ReaderViewPopup_SettingMenu ||
+           state->popup == ReaderViewPopup_Overflow)
   {
     result.x = bounds.x + bounds.w - result.w - RV_INSET;
     result.y = input->layout->toolbar_rect.y + input->layout->toolbar_rect.h;
@@ -1616,22 +1969,49 @@ rv_popup_row(UI0Rect popup, UI0S32 row)
                  RV_CONTROL_HEIGHT);
 }
 
+static UI0Rect
+rv_font_popup_row(const ReaderViewBuildInput *input,
+                  UI0Rect popup,
+                  UI0S32 row)
+{
+  UI0MenuStyle style = ui0_menu_style_from_resolved(input->theme);
+  UI0FlatRowPopupGeometry geometry;
+  UI0FlatRowPopupRowRects rects;
+  memset(&geometry, 0, sizeof(geometry));
+  geometry.padding_left = style.popup_padding_right;
+  geometry.padding_right = style.popup_padding_right;
+  geometry.padding_top = style.popup_padding_y;
+  geometry.padding_bottom = style.popup_padding_y;
+  geometry.row_height = style.row_height;
+  geometry.row_gap = style.row_gap;
+  geometry.indicator_width = UI0FlatRowIndicator_DefaultWidth;
+  geometry.indicator_gap = UI0FlatRowIndicator_DefaultGap;
+  rects = ui0_flat_row_popup_row_rects(popup, geometry, row);
+  return rects.body_rect;
+}
+
 static void
 rv_build_setting_popup(RVBuildContext *ctx, UI0Rect popup)
 {
   const ReaderViewSettingControl *setting = rv_find_setting(
     ctx->input->projection, ctx->input->state->active_setting_kind);
   UI0S32 index;
+  UI0S32 choice_count;
   if (!setting)
   {
     ctx->input->state->popup = ReaderViewPopup_None;
     return;
   }
-  for (index = 0; index < setting->choices.count; ++index)
+  choice_count = setting->kind == ReaderViewSetting_FontFamily ?
+    rv_min(setting->choices.count, RV_FONT_POPUP_CHOICE_CAP) :
+    setting->choices.count;
+  for (index = 0; index < choice_count; ++index)
   {
     const ReaderViewChoice *choice = setting->choices.items + index;
     if (rv_popup_button(ctx, 100, choice->key,
-                        rv_popup_row(popup, index),
+                        setting->kind == ReaderViewSetting_FontFamily ?
+                          rv_font_popup_row(ctx->input, popup, index) :
+                          rv_popup_row(popup, index),
                         choice->label,
                         (choice->flags & ReaderViewChoice_Enabled) != 0,
                         (choice->flags & ReaderViewChoice_Selected) != 0,
@@ -2363,34 +2743,93 @@ rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
   }
 }
 
+static UI0Rect
+rv_gutter_icon_rect(UI0Rect visual_rect)
+{
+  UI0S32 width = rv_min(8, visual_rect.w);
+  UI0S32 height = rv_min(14, visual_rect.h);
+  return rv_rect(visual_rect.x + (visual_rect.w - width) / 2,
+                 visual_rect.y + (visual_rect.h - height) / 2,
+                 width,
+                 height);
+}
+
+static UI0B32
+rv_gutter_icon_control(RVBuildContext *ctx,
+                       UI0U64 tag,
+                       UI0Rect hot_rect,
+                       UI0Rect visual_rect,
+                       ReaderViewText label,
+                       UI0B32 enabled,
+                       UI0IconKind icon_kind)
+{
+  UI0S32 control_index;
+  UI0S32 icon_index;
+  UI0B32 invoked;
+  if (hot_rect.w <= 0 || hot_rect.h <= 0 ||
+      visual_rect.w <= 0 || visual_rect.h <= 0)
+  {
+    return 0;
+  }
+  control_index = ctx->control_count;
+  icon_index = ctx->icon_count;
+  invoked = rv_add_icon_control(ctx,
+                                rv_id(tag, 0),
+                                0,
+                                UI0ControlKind_IconButton,
+                                ReaderViewSemantic_Button,
+                                UI0RootKind_Normal,
+                                visual_rect,
+                                hot_rect,
+                                label,
+                                rv_text(0, 0),
+                                0,
+                                enabled,
+                                0,
+                                0,
+                                0,
+                                0,
+                                icon_kind,
+                                rv_gutter_icon_rect(visual_rect),
+                                0);
+  if (ctx->control_count > control_index && ctx->icon_count > icon_index)
+  {
+    UI0ControlStateFlags state =
+      ctx->storage->control_records[control_index].state;
+    ctx->icons[icon_index].visible = enabled &&
+      (state & (UI0ControlState_Hovered |
+                UI0ControlState_Pressed |
+                UI0ControlState_FocusVisible)) != 0;
+  }
+  return invoked;
+}
+
 static void
 rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
 {
   const ReaderViewProjection *projection = ctx->input->projection;
   const ReaderViewLayout *layout = ctx->input->layout;
   if (layout->previous_gutter_visible &&
-      rv_add_control(ctx, rv_id(400, 0), 0,
-                     UI0ControlKind_IconButton,
-                     ReaderViewSemantic_Button,
-                     UI0RootKind_Normal,
-                     layout->previous_gutter_rect,
-                     labels.previous_page, rv_text(0, 0), 0,
-                     rv_has_document_flag(projection,
-                       ReaderViewDocument_CanGoPreviousPage),
-                     0, 0, 0, 0))
+      rv_gutter_icon_control(
+        ctx, 400,
+        layout->previous_gutter_rect,
+        layout->previous_gutter_visual_rect,
+        labels.previous_page,
+        rv_has_document_flag(projection,
+          ReaderViewDocument_CanGoPreviousPage),
+        UI0IconKind_ChevronLeft))
     (void)rv_add_action(ctx, ReaderViewAction_PreviousPage, 0, 0,
                         ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                         ReaderViewRightFilter_All, 0, rv_text(0, 0));
   if (layout->next_gutter_visible &&
-      rv_add_control(ctx, rv_id(401, 0), 0,
-                     UI0ControlKind_IconButton,
-                     ReaderViewSemantic_Button,
-                     UI0RootKind_Normal,
-                     layout->next_gutter_rect,
-                     labels.next_page, rv_text(0, 0), 0,
-                     rv_has_document_flag(projection,
-                       ReaderViewDocument_CanGoNextPage),
-                     0, 0, 0, 0))
+      rv_gutter_icon_control(
+        ctx, 401,
+        layout->next_gutter_rect,
+        layout->next_gutter_visual_rect,
+        labels.next_page,
+        rv_has_document_flag(projection,
+          ReaderViewDocument_CanGoNextPage),
+        UI0IconKind_ChevronRight))
     (void)rv_add_action(ctx, ReaderViewAction_NextPage, 0, 0,
                         ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                         ReaderViewRightFilter_All, 0, rv_text(0, 0));
@@ -2401,10 +2840,7 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
     UI0S32 slider_value = projection->progress.location_count > 1 ?
       (UI0S32)((projection->progress.location_index * 10000ull) /
                (projection->progress.location_count - 1ull)) : 0;
-    UI0Rect slider_rect = rv_rect(layout->progress_rect.x + 96,
-                                  layout->progress_rect.y + 8,
-                                  rv_max(0, layout->progress_rect.w - 192),
-                                  22);
+    UI0Rect slider_rect = layout->progress_rect;
     memset(&spec, 0, sizeof(spec));
     spec.id = rv_id(402, 0);
     spec.root = UI0RootKind_Normal;
@@ -2457,16 +2893,10 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
                           ReaderViewRightFilter_All, location, rv_text(0, 0));
     }
     rv_add_text_record(ctx, rv_id(403, 0), 0,
-                       rv_rect(layout->progress_rect.x + RV_INSET,
-                               layout->progress_rect.y,
-                               80, layout->progress_rect.h),
-                       projection->progress.chapter,
-                       ReaderViewSemantic_Status,
-                       ReaderViewSemantic_Enabled, 0);
-    rv_add_text_record(ctx, rv_id(404, 0), 0,
-                       rv_rect(layout->progress_rect.x + layout->progress_rect.w - 88,
-                               layout->progress_rect.y,
-                               76, layout->progress_rect.h),
+                       rv_rect(layout->page_surface_rect.x,
+                               layout->progress_rect.y - 22,
+                               layout->page_surface_rect.w,
+                               16),
                        projection->progress.label,
                        ReaderViewSemantic_Status,
                        ReaderViewSemantic_Enabled, 0);
@@ -2811,6 +3241,18 @@ reader_view_build(const ReaderViewBuildInput *input,
                           ctx.control_count);
   (void)ui0_slider_draw_records(&ctx.draw, &ctx.sliders);
   (void)ui0_scroll_draw_records(&ctx.draw, &ctx.scrolls);
+  for (UI0S32 icon_index = 0; icon_index < ctx.icon_count; ++icon_index)
+  {
+    const RVIconRecord *icon = ctx.icons + icon_index;
+    if (icon->visible && icon->control_index >= 0 &&
+        icon->control_index < ctx.control_count)
+    {
+      (void)ui0_draw_push_icon(&ctx.draw,
+                               storage->control_records + icon->control_index,
+                               icon->icon_kind,
+                               icon->rect);
+    }
+  }
 
   if ((ctx.signals.error_flags & UI0SignalError_NoRecordCap) != 0 ||
       (ctx.sliders.error_flags & UI0SliderError_NoRecordCap) != 0 ||

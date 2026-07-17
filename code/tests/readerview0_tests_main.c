@@ -88,6 +88,93 @@ find_action(const ReaderViewFrame *frame, ReaderViewActionKind kind)
   return 0;
 }
 
+static UI0S32
+count_draw_op_for_source(const ReaderViewFrame *frame,
+                         UI0DrawOpKind op,
+                         UI0ID source_id)
+{
+  UI0S32 index;
+  UI0S32 result = 0;
+  for (index = 0; index < frame->draw_command_count; ++index)
+    if (frame->draw_commands[index].op == op &&
+        frame->draw_commands[index].source_id == source_id)
+    {
+      result += 1;
+    }
+  return result;
+}
+
+static const UI0DrawCommand *
+find_icon_for_source(const ReaderViewFrame *frame, UI0ID source_id)
+{
+  UI0S32 index;
+  for (index = 0; index < frame->draw_command_count; ++index)
+    if (frame->draw_commands[index].op == UI0DrawOp_Icon &&
+        frame->draw_commands[index].source_id == source_id)
+    {
+      return frame->draw_commands + index;
+    }
+  return 0;
+}
+
+static UI0S32
+count_semantic(const ReaderViewFrame *frame, const char *name)
+{
+  UI0S32 index;
+  UI0S32 result = 0;
+  for (index = 0; index < frame->semantic_node_count; ++index)
+    if (text_equal(frame->semantic_nodes[index].name, name)) result += 1;
+  return result;
+}
+
+static void
+check_icon_control(const ReaderViewFrame *frame,
+                   const char *name,
+                   UI0Rect rect,
+                   UI0IconKind icon_kind,
+                   const char *test_name)
+{
+  const ReaderViewSemanticNode *semantic = find_semantic(frame, name);
+  const UI0DrawCommand *icon = semantic ?
+    find_icon_for_source(frame, semantic->id) : 0;
+  check(semantic != 0 && rect_equal(semantic->rect, rect) &&
+        icon != 0 && icon->icon_kind == icon_kind &&
+        count_draw_op_for_source(frame, UI0DrawOp_Text,
+                                 semantic ? semantic->id : 0) == 0,
+        test_name);
+}
+
+static void
+check_loaded_toolbar_icon_order(const ReaderViewFrame *frame)
+{
+  static const UI0IconKind expected[11] = {
+    UI0IconKind_List,
+    UI0IconKind_Search,
+    UI0IconKind_ArrowLeft,
+    UI0IconKind_ArrowRight,
+    UI0IconKind_Expand,
+    UI0IconKind_TextSize,
+    UI0IconKind_LineSpacing,
+    UI0IconKind_CaseSensitive,
+    UI0IconKind_SunMoon,
+    UI0IconKind_Notebook,
+    UI0IconKind_Bookmark,
+  };
+  UI0S32 draw_index;
+  UI0S32 icon_index = 0;
+  UI0B32 matches = 1;
+  for (draw_index = 0; draw_index < frame->draw_command_count; ++draw_index)
+  {
+    const UI0DrawCommand *command = frame->draw_commands + draw_index;
+    if (command->op != UI0DrawOp_Icon) continue;
+    if (icon_index >= 11 || command->icon_kind != expected[icon_index])
+      matches = 0;
+    icon_index += 1;
+  }
+  check(matches && icon_index == 11,
+        "loaded toolbar has exact fixed icon order and count");
+}
+
 static UI0U64
 hash_bytes(UI0U64 hash, const void *data, UI0U32 size)
 {
@@ -126,14 +213,15 @@ frame_contract_hash(const ReaderViewFrame *frame)
 
 static ReaderViewProjection
 full_projection(ReaderViewSettingControl *settings,
-                ReaderViewChoice *font_choices,
+                ReaderViewChoice *setting_choices,
                 ReaderViewTocRow *toc_rows,
                 ReaderViewFindRow *find_rows,
                 ReaderViewRightRow *right_rows)
 {
   ReaderViewProjection result = minimal_projection();
-  memset(settings, 0, sizeof(*settings));
-  memset(font_choices, 0, 2 * sizeof(*font_choices));
+  ReaderViewChoice *font_choices = setting_choices;
+  memset(settings, 0, READER_VIEW_SETTING_CAP * sizeof(*settings));
+  memset(setting_choices, 0, 8 * sizeof(*setting_choices));
   memset(toc_rows, 0, 2 * sizeof(*toc_rows));
   memset(find_rows, 0, sizeof(*find_rows));
   memset(right_rows, 0, sizeof(*right_rows));
@@ -159,6 +247,12 @@ full_projection(ReaderViewSettingControl *settings,
                           ReaderViewDocument_CanGoForward |
                           ReaderViewDocument_CanToggleFullscreen |
                           ReaderViewDocument_CanToggleDistraction;
+  result.chrome_title.data = "EPUB Reader";
+  result.chrome_title.size = 11;
+  result.document_title.data = "Host document title";
+  result.document_title.size = 19;
+  result.labels.annotations.data = "Annotations";
+  result.labels.annotations.size = 11;
   result.progress.location_count = 100;
   result.progress.location_index = 24;
   result.progress.page_count = 10;
@@ -169,24 +263,66 @@ full_projection(ReaderViewSettingControl *settings,
   result.progress.label.data = "3 of 10";
   result.progress.label.size = 7;
 
-  font_choices[0].key = 10;
-  font_choices[0].label.data = "Serif";
-  font_choices[0].label.size = 5;
-  font_choices[0].flags = ReaderViewChoice_Enabled |
-                          ReaderViewChoice_Selected;
-  font_choices[1].key = 11;
-  font_choices[1].label.data = "Sans";
-  font_choices[1].label.size = 4;
-  font_choices[1].flags = ReaderViewChoice_Enabled;
-  settings[0].kind = ReaderViewSetting_FontFamily;
-  settings[0].label.data = "Font";
-  settings[0].label.size = 4;
+  {
+    static const char *font_labels[5] = {
+      "Serif", "Sans", "Georgia", "Atkinson", "System"
+    };
+    UI0S32 index;
+    for (index = 0; index < 5; ++index)
+    {
+      font_choices[index].key = 10 + (ReaderViewKey)index;
+      font_choices[index].label.data = font_labels[index];
+      font_choices[index].label.size = (UI0S32)strlen(font_labels[index]);
+      font_choices[index].flags = ReaderViewChoice_Enabled |
+        (index == 0 ? ReaderViewChoice_Selected : 0);
+    }
+  }
+  setting_choices[5].key = 15;
+  setting_choices[5].label.data = "Default";
+  setting_choices[5].label.size = 7;
+  setting_choices[5].flags = ReaderViewChoice_Enabled |
+                             ReaderViewChoice_Selected;
+  setting_choices[6].key = 16;
+  setting_choices[6].label.data = "Comfortable";
+  setting_choices[6].label.size = 11;
+  setting_choices[6].flags = ReaderViewChoice_Enabled |
+                             ReaderViewChoice_Selected;
+  setting_choices[7].key = 17;
+  setting_choices[7].label.data = "Light";
+  setting_choices[7].label.size = 5;
+  setting_choices[7].flags = ReaderViewChoice_Enabled |
+                             ReaderViewChoice_Selected;
+
+  settings[0].kind = ReaderViewSetting_Theme;
+  settings[0].label.data = "Theme";
+  settings[0].label.size = 5;
   settings[0].status = ready_status();
-  settings[0].choices.items = font_choices;
-  settings[0].choices.count = 2;
-  settings[0].choices.presentation = ReaderViewChoicePresentation_Menu;
+  settings[0].choices.items = setting_choices + 7;
+  settings[0].choices.count = 1;
+  settings[0].choices.presentation = ReaderViewChoicePresentation_Segments;
+  settings[1].kind = ReaderViewSetting_FontFamily;
+  settings[1].label.data = "Font";
+  settings[1].label.size = 4;
+  settings[1].status = ready_status();
+  settings[1].choices.items = font_choices;
+  settings[1].choices.count = 5;
+  settings[1].choices.presentation = ReaderViewChoicePresentation_Menu;
+  settings[2].kind = ReaderViewSetting_LineSpacing;
+  settings[2].label.data = "Spacing";
+  settings[2].label.size = 7;
+  settings[2].status = ready_status();
+  settings[2].choices.items = setting_choices + 6;
+  settings[2].choices.count = 1;
+  settings[2].choices.presentation = ReaderViewChoicePresentation_Stepper;
+  settings[3].kind = ReaderViewSetting_FontSize;
+  settings[3].label.data = "Size";
+  settings[3].label.size = 4;
+  settings[3].status = ready_status();
+  settings[3].choices.items = setting_choices + 5;
+  settings[3].choices.count = 1;
+  settings[3].choices.presentation = ReaderViewChoicePresentation_Stepper;
   result.settings.items = settings;
-  result.settings.count = 1;
+  result.settings.count = READER_VIEW_SETTING_CAP;
 
   toc_rows[0].key = 20;
   toc_rows[0].label.data = "One";
@@ -367,8 +503,8 @@ main(void)
   ReaderViewFrame frame;
   UI0TokenSet tokens = ui0_default_tokens(UI0ThemeKind_Light);
   UI0ResolvedTheme theme = ui0_resolve_tokens(&tokens);
-  ReaderViewSettingControl settings[1];
-  ReaderViewChoice font_choices[2];
+  ReaderViewSettingControl settings[READER_VIEW_SETTING_CAP];
+  ReaderViewChoice setting_choices[8];
   ReaderViewTocRow toc_rows[2];
   ReaderViewFindRow find_rows[1];
   ReaderViewRightRow right_rows[1];
@@ -384,16 +520,23 @@ main(void)
   ReaderViewContentGeometry geometry;
   ReaderViewContentGeometry geometry_repeat;
 
-  check(READERVIEW0_API_VERSION == 2,
+  check(READERVIEW0_API_VERSION == 3,
         "public API version");
   check(READERVIEW0_VERSION_MAJOR == 0 &&
-        READERVIEW0_VERSION_MINOR == 2 &&
+        READERVIEW0_VERSION_MINOR == 3 &&
         READERVIEW0_VERSION_PATCH == 0 &&
-        strcmp(READERVIEW0_VERSION_STRING, "0.2.0-dev") == 0,
+        strcmp(READERVIEW0_VERSION_STRING, "0.3.0-dev") == 0,
         "public package version");
-  check(READERVIEW0_UI0_REQUIRED_API_VERSION == 90 &&
-        UI0_API_VERSION == 90,
+  check(READERVIEW0_UI0_REQUIRED_API_VERSION == 91 &&
+        UI0_API_VERSION == 91,
         "exact UI0 API version");
+  check(READER_VIEW_REFERENCE_TOP_CHROME_HEIGHT == 56 &&
+        READER_VIEW_REFERENCE_FOOTER_HEIGHT == 38 &&
+        READER_VIEW_REFERENCE_LEFT_PANEL_WIDTH == 420 &&
+        READER_VIEW_REFERENCE_RIGHT_PANEL_WIDTH == 320 &&
+        READER_VIEW_REFERENCE_PANEL_INSET == 12 &&
+        READER_VIEW_REFERENCE_PANEL_PAGE_GAP == 14,
+        "re10 reference chrome geometry constants");
 
   test_zero_document_interaction(&theme);
 
@@ -497,8 +640,8 @@ main(void)
         "wide layout resolves");
   check(layout.mode == ReaderViewLayout_WideDocked,
         "wide layout mode");
-  check(layout.toolbar_density == ReaderViewToolbar_Full,
-        "full toolbar density");
+  check(layout.toolbar_density == ReaderViewToolbar_Compact,
+        "fixed compact toolbar density");
 
   memset(&frame_input, 0, sizeof(frame_input));
   memset(&build_input, 0, sizeof(build_input));
@@ -518,18 +661,151 @@ main(void)
         "narrow layout resolves");
   check(layout.mode == ReaderViewLayout_Overlay,
         "narrow overlay mode");
-  check(layout.toolbar_density == ReaderViewToolbar_Overflow,
-        "narrow overflow density");
+  check(layout.toolbar_density == ReaderViewToolbar_Compact,
+        "narrow fixed compact density");
 
-  projection = full_projection(settings, font_choices, toc_rows,
+  projection = full_projection(settings, setting_choices, toc_rows,
                                find_rows, right_rows);
   reader_view_state_reset_document(&state, projection.document_key);
   memset(&layout_input, 0, sizeof(layout_input));
-  layout_input.bounds = ui0_rect(0, 0, 1280, 800);
+  layout_input.bounds = ui0_rect(0, 0, 1400, 780);
   layout_input.features = projection.features;
   layout_input.document_flags = projection.document_flags;
+  layout_input.host_toolbar_trailing_width = 38;
   check(reader_view_resolve_layout(&state, &layout_input, &layout),
         "full layout resolves");
+  check(layout.mode == ReaderViewLayout_WideDocked &&
+        layout.toolbar_density == ReaderViewToolbar_Compact &&
+        layout.toolbar_visible && layout.progress_visible &&
+        !layout.left_panel_visible && !layout.right_panel_visible &&
+        rect_equal(layout.toolbar_rect, ui0_rect(0, 0, 1400, 56)) &&
+        rect_equal(layout.shared_toolbar_rect,
+                   ui0_rect(922, 10, 420, 28)) &&
+        rect_equal(layout.host_toolbar_trailing_rect,
+                   ui0_rect(1350, 10, 30, 28)) &&
+        rect_equal(layout.body_rect, ui0_rect(0, 56, 1400, 686)) &&
+        rect_equal(layout.viewport_rect, ui0_rect(0, 56, 1400, 686)) &&
+        rect_equal(layout.page_surface_rect,
+                   ui0_rect(370, 56, 660, 686)) &&
+        rect_equal(layout.content_rect, ui0_rect(422, 124, 556, 550)) &&
+        rect_equal(layout.progress_rect, ui0_rect(370, 760, 660, 18)),
+        "atomic reference chrome and content geometry is exact");
+  check(rect_equal(layout.previous_gutter_rect,
+                   ui0_rect(4, 56, 366, 686)) &&
+        rect_equal(layout.next_gutter_rect,
+                   ui0_rect(1030, 56, 366, 686)) &&
+        rect_equal(layout.previous_gutter_visual_rect,
+                   ui0_rect(165, 355, 44, 88)) &&
+        rect_equal(layout.next_gutter_visual_rect,
+                   ui0_rect(1191, 355, 44, 88)),
+        "reference paging hot and visual geometry is exact");
+
+  state.left_panel = ReaderViewLeftPanel_Contents;
+  state.right_panel_open = 1;
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "two-panel reference layout resolves");
+  check(rect_equal(layout.left_panel_rect,
+                   ui0_rect(12, 56, 420, 686)) &&
+        rect_equal(layout.right_panel_rect,
+                   ui0_rect(1068, 56, 320, 686)) &&
+        rect_equal(layout.viewport_rect, ui0_rect(434, 56, 632, 686)) &&
+        rect_equal(layout.page_surface_rect,
+                   ui0_rect(458, 56, 584, 686)) &&
+        rect_equal(layout.content_rect, ui0_rect(510, 124, 480, 550)) &&
+        rect_equal(layout.progress_rect, ui0_rect(458, 760, 584, 18)),
+        "two-panel reference page reservation is exact");
+  check(rect_equal(layout.previous_gutter_rect,
+                   ui0_rect(440, 56, 18, 686)) &&
+        rect_equal(layout.next_gutter_rect,
+                   ui0_rect(1042, 56, 18, 686)) &&
+        rect_equal(layout.previous_gutter_visual_rect,
+                   ui0_rect(440, 355, 18, 88)) &&
+        rect_equal(layout.next_gutter_visual_rect,
+                   ui0_rect(1042, 355, 18, 88)),
+        "two-panel gutter reservation is exact");
+
+  layout_input.document_flags |= ReaderViewDocument_Fullscreen;
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "fullscreen reference layout resolves");
+  check(!layout.toolbar_visible && !layout.progress_visible &&
+        !layout.left_panel_visible && !layout.right_panel_visible &&
+        rect_equal(layout.body_rect, ui0_rect(0, 0, 1400, 780)) &&
+        rect_equal(layout.viewport_rect, ui0_rect(0, 0, 1400, 780)) &&
+        rect_equal(layout.page_surface_rect,
+                   ui0_rect(370, 0, 660, 780)) &&
+        rect_equal(layout.content_rect, ui0_rect(422, 68, 556, 644)),
+        "fullscreen atomically hides chrome and expands page geometry");
+
+  state.left_panel = ReaderViewLeftPanel_None;
+  state.right_panel_open = 0;
+  layout_input.document_flags = projection.document_flags;
+  layout_input.bounds = ui0_rect(0, 0, 940, 520);
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "narrow reference layout resolves exactly");
+  check(layout.mode == ReaderViewLayout_SingleDocked &&
+        layout.toolbar_density == ReaderViewToolbar_Compact &&
+        rect_equal(layout.toolbar_rect, ui0_rect(0, 0, 940, 56)) &&
+        rect_equal(layout.shared_toolbar_rect,
+                   ui0_rect(462, 10, 420, 28)) &&
+        rect_equal(layout.host_toolbar_trailing_rect,
+                   ui0_rect(890, 10, 30, 28)) &&
+        rect_equal(layout.body_rect, ui0_rect(0, 56, 940, 426)) &&
+        rect_equal(layout.viewport_rect, ui0_rect(0, 56, 940, 426)) &&
+        rect_equal(layout.page_surface_rect,
+                   ui0_rect(140, 56, 660, 426)) &&
+        rect_equal(layout.content_rect, ui0_rect(192, 124, 556, 290)) &&
+        rect_equal(layout.progress_rect, ui0_rect(140, 500, 660, 18)),
+        "narrow reference toolbar, page, content, and progress are exact");
+  check(rect_equal(layout.previous_gutter_rect,
+                   ui0_rect(4, 56, 136, 426)) &&
+        rect_equal(layout.next_gutter_rect,
+                   ui0_rect(800, 56, 136, 426)) &&
+        rect_equal(layout.previous_gutter_visual_rect,
+                   ui0_rect(50, 225, 44, 88)) &&
+        rect_equal(layout.next_gutter_visual_rect,
+                   ui0_rect(846, 225, 44, 88)),
+        "narrow reference gutter geometry is exact");
+
+  state.left_panel = ReaderViewLeftPanel_Contents;
+  state.right_panel_open = 1;
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "narrow two-panel reference edge resolves");
+  check(rect_equal(layout.left_panel_rect,
+                   ui0_rect(12, 56, 313, 426)) &&
+        rect_equal(layout.right_panel_rect,
+                   ui0_rect(693, 56, 235, 426)) &&
+        rect_equal(layout.viewport_rect, ui0_rect(434, 56, 172, 426)) &&
+        rect_equal(layout.page_surface_rect,
+                   ui0_rect(458, 56, 160, 426)) &&
+        rect_equal(layout.content_rect, ui0_rect(510, 124, 80, 290)) &&
+        rect_equal(layout.progress_rect, ui0_rect(458, 500, 160, 18)),
+        "narrow panel edge preserves exact old available-rect page math");
+  check(rect_equal(layout.previous_gutter_rect,
+                   ui0_rect(333, 56, 125, 426)) &&
+        rect_equal(layout.next_gutter_rect,
+                   ui0_rect(618, 56, 67, 426)) &&
+        rect_equal(layout.previous_gutter_visual_rect,
+                   ui0_rect(373, 225, 44, 88)) &&
+        rect_equal(layout.next_gutter_visual_rect,
+                   ui0_rect(629, 225, 44, 88)),
+        "narrow panel edge preserves exact gutter math");
+  state.left_panel = ReaderViewLeftPanel_None;
+  state.right_panel_open = 0;
+
+  layout_input.bounds = ui0_rect(11, 13, 497, 520);
+  layout.bounds = ui0_rect(1, 2, 3, 4);
+  check(!reader_view_resolve_layout(&state, &layout_input, &layout) &&
+        rect_equal(layout.bounds, ui0_rect(0, 0, 0, 0)),
+        "undersized fixed-toolbar layout fails closed");
+  layout_input.bounds = ui0_rect(11, 13, 940, 277);
+  layout.bounds = ui0_rect(1, 2, 3, 4);
+  check(!reader_view_resolve_layout(&state, &layout_input, &layout) &&
+        rect_equal(layout.bounds, ui0_rect(0, 0, 0, 0)),
+        "undersized content-height layout fails closed");
+
+  layout_input.bounds = ui0_rect(0, 0, 1400, 780);
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "full reference layout restored");
   memset(&frame_input, 0, sizeof(frame_input));
   build_input.frame_index = 10;
   build_input.layout = &layout;
@@ -537,6 +813,47 @@ main(void)
   check(reader_view_build(&build_input, &storage, &frame), "full build");
   check(frame.draw_command_count > 0, "full draw records");
   check(frame.semantic_node_count > 10, "full semantic records");
+  check(count_semantic(&frame, "Open") == 0,
+        "loaded toolbar never exposes Open");
+  check_icon_control(&frame, "Contents", ui0_rect(922, 10, 30, 28),
+                     UI0IconKind_List,
+                     "Contents icon control geometry and identity");
+  check_icon_control(&frame, "Find", ui0_rect(960, 10, 30, 28),
+                     UI0IconKind_Search,
+                     "Find icon control geometry and identity");
+  check_icon_control(&frame, "Back", ui0_rect(998, 10, 30, 28),
+                     UI0IconKind_ArrowLeft,
+                     "Back icon control geometry and identity");
+  check_icon_control(&frame, "Forward", ui0_rect(1036, 10, 30, 28),
+                     UI0IconKind_ArrowRight,
+                     "Forward icon control geometry and identity");
+  check_icon_control(&frame, "Full screen", ui0_rect(1084, 10, 30, 28),
+                     UI0IconKind_Expand,
+                     "Fullscreen icon control geometry and identity");
+  check_icon_control(&frame, "Size", ui0_rect(1122, 10, 30, 28),
+                     UI0IconKind_TextSize,
+                     "Size icon control geometry and identity");
+  check_icon_control(&frame, "Spacing", ui0_rect(1160, 10, 30, 28),
+                     UI0IconKind_LineSpacing,
+                     "Spacing icon control geometry and identity");
+  check_icon_control(&frame, "Font", ui0_rect(1198, 10, 30, 28),
+                     UI0IconKind_CaseSensitive,
+                     "Font icon control geometry and identity");
+  check_icon_control(&frame, "Theme", ui0_rect(1236, 10, 30, 28),
+                     UI0IconKind_SunMoon,
+                     "Theme icon control geometry and identity");
+  check_icon_control(&frame, "Annotations", ui0_rect(1274, 10, 30, 28),
+                     UI0IconKind_Notebook,
+                     "Annotations icon control geometry and identity");
+  check_icon_control(&frame, "Bookmark", ui0_rect(1312, 10, 30, 28),
+                     UI0IconKind_Bookmark,
+                     "Bookmark icon control geometry and identity");
+  check_loaded_toolbar_icon_order(&frame);
+  node = find_semantic(&frame, "EPUB Reader");
+  check(node != 0 && rect_equal(node->rect, ui0_rect(20, 14, 180, 22)),
+        "portable chrome title uses accepted reference geometry");
+  check(find_semantic(&frame, "Host document title") == 0,
+        "host document title is not substituted into visible chrome");
   first_hash = frame_contract_hash(&frame);
   check(reader_view_debug_snapshot(&projection, &storage, &frame,
                                    &debug_first),
@@ -557,8 +874,8 @@ main(void)
         "opaque keys excluded from normalized snapshot");
   toc_rows[1].key = 21;
 
-  projection.labels.open.data = "Open EPUB";
-  projection.labels.open.size = 9;
+  projection.labels.contents.data = "Table of contents";
+  projection.labels.contents.size = 17;
   build_input.frame_index += 1;
   check(reader_view_build(&build_input, &storage, &frame),
         "visible-change rebuild");
@@ -566,14 +883,14 @@ main(void)
                                    &debug_changed),
         "visible-change snapshot");
   check(debug_changed.projection_hash != debug_first.projection_hash &&
-        debug_changed.control_hash != debug_first.control_hash &&
-        debug_changed.draw_hash != debug_first.draw_hash &&
+        debug_changed.control_hash == debug_first.control_hash &&
+        debug_changed.draw_hash == debug_first.draw_hash &&
         debug_changed.semantic_hash != debug_first.semantic_hash,
-        "visible text changes normalized evidence");
-  projection.labels.open.data = 0;
-  projection.labels.open.size = 0;
+        "accessible icon label changes semantic but not visual evidence");
+  projection.labels.contents.data = 0;
+  projection.labels.contents.size = 0;
 
-  layout_input.bounds = ui0_rect(17, 23, 1280, 800);
+  layout_input.bounds = ui0_rect(17, 23, 1400, 780);
   check(reader_view_resolve_layout(&state, &layout_input, &layout),
         "shifted-origin layout resolves");
   build_input.frame_index += 1;
@@ -605,12 +922,107 @@ main(void)
   }
   check(memcmp(&debug_first, &debug_shifted, sizeof(debug_first)) == 0,
         "absolute client origin excluded from normalized snapshot");
-  layout_input.bounds = ui0_rect(0, 0, 1280, 800);
+  layout_input.bounds = ui0_rect(0, 0, 1400, 780);
   check(reader_view_resolve_layout(&state, &layout_input, &layout),
         "full layout restored after debug checks");
   build_input.frame_index += 1;
   check(reader_view_build(&build_input, &storage, &frame),
         "full frame restored after debug checks");
+
+  node = find_semantic(&frame, "3 of 10");
+  check(node != 0 && node->role == ReaderViewSemantic_Slider &&
+        rect_equal(node->rect, ui0_rect(370, 760, 660, 18)),
+        "progress semantic spans the exact page width");
+
+  node = find_semantic(&frame, "Previous page");
+  check(node != 0 &&
+        rect_equal(node->rect, ui0_rect(165, 355, 44, 88)) &&
+        count_draw_op_for_source(&frame, UI0DrawOp_Text,
+                                 node ? node->id : 0) == 0 &&
+        find_icon_for_source(&frame, node ? node->id : 0) == 0,
+        "idle previous gutter uses visual semantic rect without text");
+  if (node)
+  {
+    UI0ID previous_id = node->id;
+    frame_input.ui = ui0_input_pointer(10, 100, 1, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "previous gutter hot-area press build");
+    check(find_icon_for_source(&frame, previous_id) != 0 &&
+          find_icon_for_source(&frame, previous_id)->icon_kind ==
+            UI0IconKind_ChevronLeft,
+          "previous gutter icon appears on interaction");
+    frame_input.ui = ui0_input_pointer(10, 100, 0, 0, 1);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "previous gutter hot-area release build");
+    check(find_action(&frame, ReaderViewAction_PreviousPage) != 0,
+          "previous gutter large hot area emits paging action");
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "previous gutter interaction clears");
+  }
+
+  node = find_semantic(&frame, "Font");
+  check(node != 0, "Font toolbar semantic present");
+  if (node)
+  {
+    UI0Rect font_rect = node->rect;
+    frame_input.ui = ui0_input_pointer(font_rect.x + font_rect.w / 2,
+                                       font_rect.y + font_rect.h / 2,
+                                       1, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Font popup press build");
+    frame_input.ui = ui0_input_pointer(font_rect.x + font_rect.w / 2,
+                                       font_rect.y + font_rect.h / 2,
+                                       0, 0, 1);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Font popup release build");
+    check(state.popup == ReaderViewPopup_SettingMenu &&
+          state.active_setting_kind == ReaderViewSetting_FontFamily,
+          "Font toolbar action opens bounded setting popup state");
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Font popup visible build");
+    node = find_semantic_role(&frame, "More", ReaderViewSemantic_Menu);
+    check(node != 0 && rect_equal(node->rect,
+                                  ui0_rect(1094, 44, 170, 188)),
+          "Font popup is exactly anchored six pixels below Font");
+    node = find_semantic_role(&frame, "Serif",
+                              ReaderViewSemantic_MenuItem);
+    check(node != 0 && rect_equal(node->rect,
+                                  ui0_rect(1112, 54, 144, 32)),
+          "Font popup first row uses accepted body geometry");
+    if (node)
+    {
+      UI0Rect row_rect = node->rect;
+      frame_input.ui = ui0_input_pointer(row_rect.x + row_rect.w / 2,
+                                         row_rect.y + row_rect.h / 2,
+                                         1, 1, 0);
+      build_input.frame_index += 1;
+      check(reader_view_build(&build_input, &storage, &frame),
+            "Font choice press build");
+      frame_input.ui = ui0_input_pointer(row_rect.x + row_rect.w / 2,
+                                         row_rect.y + row_rect.h / 2,
+                                         0, 0, 1);
+      build_input.frame_index += 1;
+      check(reader_view_build(&build_input, &storage, &frame),
+            "Font choice release build");
+      action = find_action(&frame, ReaderViewAction_SelectSetting);
+      check(action != 0 && action->key == 10 &&
+            action->setting_kind == ReaderViewSetting_FontFamily &&
+            state.popup == ReaderViewPopup_None,
+            "Font choice preserves bounded SelectSetting action contract");
+    }
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Font popup interaction clears");
+  }
 
   node = find_semantic(&frame, "Contents");
   check(node != 0, "contents semantic present");
