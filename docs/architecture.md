@@ -213,6 +213,14 @@ centered literal ellipsis; the 20 px star target alone is shell-free. A row
 paints `UI0ColorRole_SurfaceElevated` only while hovered or active. Idle,
 selected-only, and focus-only rows have no fill or border, while semantic
 selection/focus and the focus ring remain published. The shell-free star
+raster and Menu control are separate physical action owners from the row body.
+The row-body hit rectangle ends at the Star's left edge when Star is available,
+otherwise at the Menu's left edge. Its full visual and semantic rectangles
+remain unchanged, and child hover/press state is reflected only into parent-row
+paint. Thus Body, Star, and Menu pointer releases are mutually exclusive; even
+a disabled Menu owns its right-edge region without selecting the row. Keyboard
+and native-accessibility row activation continue through the full semantic
+identity. The shell-free star
 raster preblends against `SurfaceElevated` while unstarred and `Badge` while
 starred. An enabled filter trigger with open, focused, focus-visible, or active
 state uses the Focus border color; its separate clipped focus ring remains

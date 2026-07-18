@@ -281,6 +281,16 @@ find_control_for_source(const ReaderViewFrameStorage *storage, UI0ID source_id)
   return 0;
 }
 
+static const UI0SignalRecord *
+find_signal_for_source(const ReaderViewFrameStorage *storage, UI0ID source_id)
+{
+  UI0S32 index;
+  for (index = 0; index < READER_VIEW_SIGNAL_CAP; ++index)
+    if (storage->signal_records[index].id == source_id)
+      return storage->signal_records + index;
+  return 0;
+}
+
 static int
 scroll_records_empty(const ReaderViewFrameStorage *storage)
 {
@@ -896,6 +906,9 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   const UI0DrawCommand *icon;
   const UI0DrawCommand *indicator;
   const UI0ControlRecord *control;
+  const UI0SignalRecord *row_signal;
+  const UI0SignalRecord *star_signal;
+  const UI0SignalRecord *menu_signal;
   const UI0TextInputRecord *input_record;
   const ReaderViewAction *action;
   UI0Rect rect;
@@ -1944,6 +1957,24 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
                                  node ? node->id : 0) == 1,
         "Annotations row menu restores the frozen centered literal ellipsis "
         "inside the standard clipped 30px menu-trigger shell");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRow, 40);
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRowStar, 40);
+  row_signal = row ? find_signal_for_source(&storage, row->id) : 0;
+  star_signal = node ? find_signal_for_source(&storage, node->id) : 0;
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRowMenu, 40);
+  menu_signal = node ? find_signal_for_source(&storage, node->id) : 0;
+  check(row != 0 && row_signal != 0 && star_signal != 0 &&
+        menu_signal != 0 &&
+        rect_equal(row->rect, ui0_rect(1078, 132, 300, 58)) &&
+        rect_equal(row_signal->rect, ui0_rect(1083, 132, 295, 58)) &&
+        rect_equal(row_signal->hit_rect, ui0_rect(1083, 132, 237, 58)) &&
+        rect_equal(star_signal->hit_rect, ui0_rect(1320, 151, 20, 20)) &&
+        rect_equal(menu_signal->hit_rect, ui0_rect(1340, 147, 30, 28)),
+        "Annotations keeps full visual/semantic row geometry while its "
+        "physical body ends before the Star and Menu child targets");
   node = find_semantic_role(&frame, "Bookmark - re10 loc 1",
                             ReaderViewSemantic_Group);
   command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
@@ -1990,7 +2021,9 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
         "Annotations overlapping star release frame builds");
   action = find_action(&frame, ReaderViewAction_ToggleRightRowStar);
   check(action != 0 && action->key == 40 && frame.action_count == 1 &&
-        find_action(&frame, ReaderViewAction_ActivateRightRow) == 0,
+        find_action(&frame, ReaderViewAction_ActivateRightRow) == 0 &&
+        state.active_right_key == 0 &&
+        state.popup == ReaderViewPopup_None,
         "Annotations overlapping parent hover preserves star-only pointer "
         "activation");
   memset(&frame_input, 0, sizeof(frame_input));
@@ -2011,6 +2044,29 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
         (node->flags & ReaderViewSemantic_Focusable) != 0,
         "Annotations row keeps its frozen parent hover fill over the menu "
         "while the menu remains the bounded child target");
+  frame_input.ui = ui0_input_pointer(1355, 161, 1, 1, 0);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations menu-only pointer press frame builds");
+  frame_input.ui = ui0_input_pointer(1355, 161, 0, 0, 1);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations menu-only pointer release frame builds");
+  check(frame.action_count == 0 &&
+        find_action(&frame, ReaderViewAction_ActivateRightRow) == 0 &&
+        find_action(&frame, ReaderViewAction_ToggleRightRowStar) == 0 &&
+        state.active_right_key == 0 &&
+        state.popup == ReaderViewPopup_RightRowActions &&
+        state.right_menu_key == 40,
+        "Annotations Menu pointer opens only its popup without a row "
+        "activation or host navigation/history action");
+  state.popup = ReaderViewPopup_None;
+  state.restore_focus_id = 0;
+  state.right_menu_key = 0;
+  state.focus_id = 0;
+  state.focus_visible = 0;
+  state.hot_id = 0;
+  state.active_id = 0;
   memset(&frame_input, 0, sizeof(frame_input));
   right_rows[0].flags |= ReaderViewRow_Selected | ReaderViewRow_Starred;
   build_input.frame_index += 1;
@@ -2101,6 +2157,8 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   }
   action = find_action(&frame, ReaderViewAction_ActivateRightRow);
   check(action != 0 && action->key == 40 && frame.action_count == 1 &&
+        find_action(&frame, ReaderViewAction_ToggleRightRowStar) == 0 &&
+        state.popup == ReaderViewPopup_None &&
         state.right_panel_open && state.active_right_key == 40 &&
         state.focus_id == right_id && !state.focus_visible,
         "Annotations row invokes exactly once and keeps panel/focus state");
@@ -2113,6 +2171,19 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   check(row != 0 &&
         (row->flags & ReaderViewSemantic_Selected) != 0,
         "direct annotation activation owns bounded selected chrome state");
+  check(row != 0 &&
+        reader_view_accessibility_focus(&state, row ? row->id : 0) &&
+        reader_view_accessibility_invoke(&state, row ? row->id : 0),
+        "Annotations full semantic row remains accessibility-invokable after "
+        "the physical child-target carve");
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations accessibility row activation frame builds");
+  action = find_action(&frame, ReaderViewAction_ActivateRightRow);
+  check(action != 0 && action->key == 40 && frame.action_count == 1 &&
+        state.focus_id == right_id && state.focus_visible,
+        "Annotations accessibility row activation remains exact and "
+        "independent of physical hit geometry");
 
   filter = find_semantic_control_source(
     &frame, ReaderViewSemanticControl_RightFilter,
@@ -2714,6 +2785,53 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
             state.popup == ReaderViewPopup_None && frame.action_count == 0,
             "disabled empty annotation menu cannot open through AT invoke");
     }
+
+    right_rows[0].kind = ReaderViewRightRow_Bookmark;
+    right_rows[0].actions = ReaderViewRightAction_None;
+    state.active_right_key = 0;
+    state.popup = ReaderViewPopup_None;
+    state.restore_focus_id = 0;
+    state.focus_id = 0;
+    state.focus_visible = 0;
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "no-star disabled-menu annotation row frame builds");
+    row = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightRow, 70);
+    option = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightRowMenu, 70);
+    row_signal = row ? find_signal_for_source(&storage, row->id) : 0;
+    menu_signal = option ? find_signal_for_source(&storage, option->id) : 0;
+    check(row != 0 && option != 0 && row_signal != 0 && menu_signal != 0 &&
+          find_semantic_control_source(
+            &frame, ReaderViewSemanticControl_RightRowStar, 70) == 0 &&
+          (option->flags & ReaderViewSemantic_Enabled) == 0 &&
+          row_signal->hit_rect.x + row_signal->hit_rect.w ==
+            menu_signal->hit_rect.x,
+          "Annotations row without Star ends its physical body at the "
+          "disabled Menu target while retaining the child record");
+    if (menu_signal)
+      frame_input.ui = ui0_input_pointer(
+        menu_signal->hit_rect.x + menu_signal->hit_rect.w / 2,
+        menu_signal->hit_rect.y + menu_signal->hit_rect.h / 2,
+        1, 1, 0);
+    build_input.frame_index += 1;
+    check(menu_signal != 0 &&
+          reader_view_build(&build_input, &storage, &frame),
+          "disabled annotation Menu pointer press frame builds");
+    if (menu_signal)
+      frame_input.ui = ui0_input_pointer(
+        menu_signal->hit_rect.x + menu_signal->hit_rect.w / 2,
+        menu_signal->hit_rect.y + menu_signal->hit_rect.h / 2,
+        0, 0, 1);
+    build_input.frame_index += 1;
+    check(menu_signal != 0 &&
+          reader_view_build(&build_input, &storage, &frame) &&
+          frame.action_count == 0 && state.active_right_key == 0 &&
+          state.popup == ReaderViewPopup_None,
+          "disabled annotation Menu owns its right-edge pointer region "
+          "without falling through to row selection");
 
     right_rows[0].kind = ReaderViewRightRow_Highlight;
     right_rows[0].actions = variants[2].flags;

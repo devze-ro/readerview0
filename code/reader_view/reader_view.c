@@ -4840,6 +4840,7 @@ rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
     UI0Rect star_hit;
     UI0Rect menu_hit;
     UI0Rect main_hit;
+    UI0Rect main_physical_rect;
     UI0Rect visible_rect;
     UI0ID row_id = rv_id(324, row->key);
     UI0S32 control_index;
@@ -4881,7 +4882,12 @@ rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
                         30, 28);
     star_hit = ui0_rect_intersect(star_rect, content_clip);
     menu_hit = ui0_rect_intersect(menu_rect, content_clip);
-    main_hit = ui0_rect_intersect(visual_row, content_clip);
+    main_physical_rect = rv_rect(
+      visual_row.x, visual_row.y,
+      rv_max(((row->actions & ReaderViewRightAction_ToggleStar) != 0 ?
+                star_rect.x : menu_rect.x) - visual_row.x, 1),
+      visual_row.h);
+    main_hit = ui0_rect_intersect(main_physical_rect, content_clip);
     visible_rect = ui0_rect_intersect(entry_rect, content_clip);
     primary_text_y = visual_row.y + (visual_row.h - primary_text_height) / 2;
     if (row->secondary.size > 0)
@@ -5043,6 +5049,24 @@ rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
                                rv_literal("..."));
     rv_set_semantic_control(ctx, rv_id(326, row->key),
                             ReaderViewSemanticControl_RightRowMenu);
+    {
+      UI0ControlRecord *row_control =
+        rv_control_record_for_id(ctx, row_id);
+      UI0ControlRecord *star_control =
+        rv_control_record_for_id(ctx, rv_id(325, row->key));
+      UI0ControlRecord *menu_control =
+        rv_control_record_for_id(ctx, rv_id(326, row->key));
+      UI0ControlStateFlags child_visual_state = UI0ControlState_None;
+      UI0ControlStateFlags visual_state_mask =
+        UI0ControlState_Hovered |
+        UI0ControlState_Pressed |
+        UI0ControlState_Active;
+      if (star_control)
+        child_visual_state |= star_control->state & visual_state_mask;
+      if (menu_control)
+        child_visual_state |= menu_control->state & visual_state_mask;
+      if (row_control) row_control->state |= child_visual_state;
+    }
   }
 }
 

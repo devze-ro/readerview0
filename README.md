@@ -60,8 +60,14 @@ The right panel reproduces the accepted filter/export/close header, sectioned
 shell, and contained filter popup. An annotation row paints the resolved
 elevated-surface fill only while hovered or active; idle, selected-only, and
 focus-only rows remain fill-free while retaining semantic selection/focus and
-the focus ring. An unstarred icon preblends against `SurfaceElevated`; a
-starred icon preblends against `Badge`. A focused/open filter trigger paints
+the focus ring. The full row remains its visual and semantic record, while its
+physical body target ends before Star or Menu; child hover/press still carries
+the frozen parent-row paint. Body, Star, and Menu pointer releases therefore
+return mutually exclusive row, toggle, or popup outcomes, and a disabled Menu
+cannot fall through into row selection. Keyboard and native-accessibility row
+activation continue through the full semantic row. An unstarred icon preblends
+against `SurfaceElevated`; a starred icon preblends against `Badge`. A
+focused/open filter trigger paints
 its border with the resolved Focus color as well as its clipped ring. Its
 row-action popup is anchored to the exact row menu, flips
 at the panel edge, and exposes the frozen Bookmark, Note, or Highlight action

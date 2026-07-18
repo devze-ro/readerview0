@@ -136,8 +136,13 @@ elevated-surface fill while hovered or active and while their own action menu is
 open; idle, selected-only, and focus-only rows have neither fill nor border.
 Semantic selection/focus and the focus ring remain intact. Pointer hover over
 either the star or row-menu child keeps the parent row's frozen hover fill while
-the child retains activation ownership; the overlapping visual hover record
-does not turn a child click into row activation.
+the child retains activation ownership. The row-body physical target ends at
+the star's left edge when Star is present, otherwise at the Menu's left edge;
+the full visual and semantic row rectangles do not change. Body, Star, and Menu
+pointer releases are therefore mutually exclusive, a disabled Menu retains its
+right-edge ownership, and keyboard/native-accessibility invocation still routes
+through the full row identity. Child hover/press state affects only the frozen
+parent paint and cannot emit a row action.
 
 Available filter choices use the frozen visual order All, Highlights, Notes,
 and Bookmarks. With all four choices present, their 274 by 29 px rows begin at
@@ -447,7 +452,8 @@ Strict MSVC C11 `/W4 /WX` validation covers:
   ellipses without a substituted icon and with the standard 30 by 28 shell,
   shell-free stars, exact elevated-surface hover/active parent-row fill even
   over star/menu children with no idle/selected-only/focus-only fill or row
-  border, all three exact
+  border, mutually exclusive Body/Star/Menu pointer outcomes, disabled-menu
+  right-edge ownership, unchanged full-row accessibility invocation, all three exact
   kind-specific action matrices, anchored and bottom-flipped popup geometry,
   pointer/keyboard focus entry, native names, four exact filter-specific empty
   states, filter selection and Escape restoration, dynamic-membership closure,
