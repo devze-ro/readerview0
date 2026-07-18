@@ -105,7 +105,9 @@ native semantic rectangle routes to its matching physical row. The separate
 accessibility bound.
 
 The first selected Find result retains its 88 px action row while its fill is
-vertically inset to `(104,176,308,80)`.
+vertically inset to `(104,176,308,80)`. Every visible result also paints the
+frozen one-pixel `BorderMuted` divider at its bottom edge; the first divider is
+`(104,259,308,1)`.
 
 The 320 px right panel is `(1068,56,320,686)`. Its accepted records are:
 
@@ -117,9 +119,12 @@ The 320 px right panel is `(1068,56,320,686)`. Its accepted records are:
 - the filter popup at `(1078,96,300,136)`; and
 - the ready filter-specific empty status at `(1078,144,300,24)`.
 
-The title begins at x 1156. The row's text begins at x 1091, and the star
-paints as a 14 by 14 icon at `(1323,154)` without a button shell. The row menu
-retains its standard 30 by 28 fill/border shell and centered literal ellipsis.
+The title begins at x 1156. The row's text begins at x 1091. A row with both
+metadata and primary copy uses the frozen centered 46 px stack: metadata is
+`(1091,144,221,20)` and primary text is `(1091,170,221,20)` for the first
+deterministic row. The star paints as a 14 by 14 icon at `(1323,154)` without a
+button shell. The row menu retains its standard 30 by 28 fill/border shell and
+centered literal ellipsis.
 Annotation rows use the elevated-surface fill only while hovered or active;
 idle, selected-only, and focus-only rows have neither fill nor border. Semantic
 selection/focus and the focus ring remain intact.
@@ -129,7 +134,11 @@ and Bookmarks. With all four choices present, their 274 by 29 px rows begin at
 `(1096,100)`, `(1096,132)`, `(1096,164)`, and `(1096,196)`. The accepted
 labels are `All (1)`, `All Highlight Colors (0)`, `Notes (0)`, and
 `Bookmarks (1)` for the deterministic fixture. The selected All rail is
-`(1086,106,3,17)`.
+`(1086,106,3,17)`. Option text uses the frozen ten-pixel horizontal padding;
+the first text rect is `(1106,100,254,29)`. The filter trigger retains its
+18 by 18 Select icon at `(1081,69)`. Escape is keyboard input, so it restores
+the trigger with visible focus; its clipped ring is the full
+`(1078,66,24,24)` trigger perimeter.
 
 ## TOC behavior
 
@@ -231,10 +240,12 @@ a control or semantic focus target.
 
 The shared frame contains exactly one bound text draw for the Annotations title,
 one for each published section heading, and one for visible typed Find input.
-These exact records and rectangles prove that absent or mismatched glyph pixels
-belong to the host's concrete text-record renderer seam; readerview0 does not
-own native glyph rasterization and must not perturb the frozen +10/+32 metadata
-and primary-text positions to compensate.
+Directional decoded-pixel evidence corrected the earlier provisional +10/+32,
+16 px row-text approximation: the accepted UI0 draw records are the centered
++12/+38, 20 px metadata/primary rectangles above. Once those shared records
+match, any remaining glyph-pixel mismatch belongs to the host's concrete
+text-record renderer seam; readerview0 still does not own native glyph
+rasterization.
 
 The action popup is anchored four pixels below the row-menu target, flips
 above a near-bottom target, and uses the frozen UI0 flat-menu metrics. At the
@@ -269,8 +280,9 @@ present.
 Selecting a filter emits one `ReaderViewAction_RightFilterChanged`, resets the
 right-panel scroll to zero, closes the popup, and restores its trigger focus.
 The popup uses normal UI0 root containment and initializes focus on the current
-filter. Escape closes it and restores the same trigger without changing the
-filter. Activating an annotation row emits one bounded
+filter. Escape closes it, restores the same trigger with a visible clipped
+focus ring, and does not change the filter. Activating an annotation row emits
+one bounded
 `ReaderViewAction_ActivateRightRow`, keeps the right panel open, and stores its
 bounded transient selection in `active_right_key`. Popup Go To returns the same
 host navigation action without changing that selection. Escape closes a
@@ -380,8 +392,9 @@ Strict MSVC C11 `/W4 /WX` validation covers:
 - the allocation/callback/provider/platform/persistence architecture audit;
 - exact shell-free left rail/dividers, outlined close, distinct TOC native
   semantic/focus and physical pointer/paint rows, Find semantic/pointer/paint
-  input split, selected-result inset, annotation
-  header/text/star composition, popup, and filter-option geometry;
+  input split, selected-result inset and per-row divider, annotation
+  header/centered text stack/star composition, 18 px filter icon, popup,
+  ten-pixel filter-option text padding, and clipped Escape focus-ring geometry;
 - current-row focus, depth indentation, panel-open state, one-action TOC
   activation, native semantic-center routing, physical `(200,154)` routing to
   visual row index 1, and exact localized `No contents` empty composition;

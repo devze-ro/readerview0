@@ -31,6 +31,7 @@ enum
   RV_NAV_FIND_START_Y = 116,
   RV_NAV_FIND_STATUS_Y = 90,
   RV_NAV_FIND_STATUS_HEIGHT = 18,
+  RV_NAV_FIND_DIVIDER_HEIGHT = 1,
   RV_NAV_BOTTOM_PAD = 10,
   RV_NAV_TITLE_HEIGHT = 24,
   RV_NAV_INPUT_HEIGHT = 34,
@@ -42,6 +43,11 @@ enum
   RV_RIGHT_FILTER_POPUP_HEIGHT = 136,
   RV_RIGHT_FILTER_ROW_HEIGHT = 29,
   RV_RIGHT_FILTER_ROW_GAP = 3,
+  RV_RIGHT_FILTER_TEXT_PADDING_X = 10,
+  RV_RIGHT_FILTER_ICON_SIZE = 18,
+  RV_RIGHT_TEXT_LINE_HEIGHT = 20,
+  RV_RIGHT_TEXT_STACK_GAP = 6,
+  RV_RIGHT_TEXT_BASELINE_OFFSET = 6,
   RV_POPUP_WIDTH = 280,
   RV_NOTE_WIDTH = 512,
   RV_NOTE_HEIGHT = 360,
@@ -2272,9 +2278,6 @@ rv_handle_escape(RVBuildContext *ctx)
 {
   ReaderViewState *state = ctx->input->state;
   UI0ID restore_id = 0;
-  UI0B32 focus_visible =
-    ctx->signals.focus_id != 0 &&
-    ctx->signals.focus_visible_id == ctx->signals.focus_id;
   if (!ctx->input->input->escape_pressed) return;
   if (state->popup == ReaderViewPopup_NoteEditor && state->note_dirty)
     return;
@@ -2316,7 +2319,7 @@ rv_handle_escape(RVBuildContext *ctx)
   }
   else
     return;
-  rv_move_focus(ctx, restore_id, focus_visible);
+  rv_move_focus(ctx, restore_id, restore_id != 0);
   ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
 }
 
@@ -3449,6 +3452,15 @@ rv_build_right_filter_popup(RVBuildContext *ctx,
                           rv_text(0, 0));
       rv_close_popup_and_restore_focus(ctx);
     }
+    {
+      UI0ControlRecord *option = rv_control_record_for_id(ctx, id);
+      if (option)
+        option->text_rect = rv_rect(
+          row_rect.x + RV_RIGHT_FILTER_TEXT_PADDING_X,
+          row_rect.y,
+          rv_max(row_rect.w - RV_RIGHT_FILTER_TEXT_PADDING_X * 2, 1),
+          row_rect.h);
+    }
     rv_set_semantic_control(ctx, id,
                             ReaderViewSemanticControl_RightFilterOption);
     slot += 1;
@@ -4296,6 +4308,13 @@ rv_build_find_panel(RVBuildContext *ctx,
       record->clip_rect = hit_rect;
       record->text_rect = rv_rect(0, 0, 0, 0);
     }
+    rv_add_visual_fill(
+      ctx, rv_id(231, row->key),
+      rv_rect(row_rect.x,
+              row_rect.y + row_rect.h - RV_NAV_FIND_DIVIDER_HEIGHT,
+              row_rect.w, RV_NAV_FIND_DIVIDER_HEIGHT),
+      content_clip,
+      ctx->input->theme->colors[UI0ColorRole_BorderMuted]);
     rv_set_semantic_control(ctx, row_id, ReaderViewSemanticControl_FindRow);
     if (row->section.size > 0)
     {
@@ -4657,7 +4676,7 @@ rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
   close_rect = rv_rect(panel.x + panel.w - 34, panel.y + 10, 24, 24);
 
   if (rv_add_icon_control(ctx, rv_id(304, 0), ctx->right_panel_id,
-                          UI0ControlKind_MenuTrigger,
+                          UI0ControlKind_SelectTrigger,
                           ReaderViewSemantic_Button,
                           UI0RootKind_Normal,
                           filter_rect, filter_rect,
@@ -4668,7 +4687,13 @@ rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
                           0, 0,
                           state->popup == ReaderViewPopup_RightFilter,
                           0, UI0IconKind_Filter,
-                          rv_toolbar_icon_rect(filter_rect), 1))
+                          rv_rect(
+                            filter_rect.x +
+                              (filter_rect.w - RV_RIGHT_FILTER_ICON_SIZE) / 2,
+                            filter_rect.y +
+                              (filter_rect.h - RV_RIGHT_FILTER_ICON_SIZE) / 2,
+                            RV_RIGHT_FILTER_ICON_SIZE,
+                            RV_RIGHT_FILTER_ICON_SIZE), 1))
   {
     state->popup = ReaderViewPopup_RightFilter;
     state->restore_focus_id = rv_id(304, 0);
@@ -4778,6 +4803,9 @@ rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
     UI0Rect visible_rect;
     UI0ID row_id = rv_id(324, row->key);
     UI0S32 control_index;
+    UI0S32 secondary_text_y = 0;
+    UI0S32 primary_text_y;
+    UI0S32 primary_text_height = 16;
     if (rv_right_row_starts_section(right, index))
     {
       UI0Rect section_rect = rv_rect(list_rect.x, row_y,
@@ -4818,6 +4846,17 @@ rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
               rv_max(star_rect.x - visual_row.x, 1), visual_row.h),
       content_clip);
     visible_rect = ui0_rect_intersect(entry_rect, content_clip);
+    primary_text_y = visual_row.y + (visual_row.h - primary_text_height) / 2;
+    if (row->secondary.size > 0)
+    {
+      secondary_text_y = visual_row.y +
+        (visual_row.h -
+         (RV_RIGHT_TEXT_LINE_HEIGHT * 2 + RV_RIGHT_TEXT_STACK_GAP)) / 2 +
+        RV_RIGHT_TEXT_BASELINE_OFFSET;
+      primary_text_y = secondary_text_y + RV_RIGHT_TEXT_LINE_HEIGHT +
+        RV_RIGHT_TEXT_STACK_GAP;
+      primary_text_height = RV_RIGHT_TEXT_LINE_HEIGHT;
+    }
     row_y += RV_RIGHT_ROW_HEIGHT;
     if (index + 1 < right->row_count &&
         (right->rows[index + 1].flags &
@@ -4869,8 +4908,9 @@ rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
     {
       rv_add_text_record_styled(
         ctx, rv_id(328, row->key), row_id,
-        rv_rect(visual_row.x + 8, visual_row.y + 10,
-                rv_max(star_rect.x - visual_row.x - 16, 1), 16),
+        rv_rect(visual_row.x + 8, secondary_text_y,
+                rv_max(star_rect.x - visual_row.x - 16, 1),
+                RV_RIGHT_TEXT_LINE_HEIGHT),
         row->secondary, ReaderViewTextStyle_ChromeMetadata,
         ReaderViewSemantic_Group, ReaderViewSemantic_Enabled, row->key);
       rv_add_text_override(ctx, rv_id(328, row->key),
@@ -4889,8 +4929,9 @@ rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
     rv_add_text_record(
       ctx, rv_id(329, row->key), row_id,
       rv_rect(visual_row.x + 8,
-              visual_row.y + (row->secondary.size > 0 ? 32 : 18),
-              rv_max(star_rect.x - visual_row.x - 16, 1), 16),
+              primary_text_y,
+              rv_max(star_rect.x - visual_row.x - 16, 1),
+              primary_text_height),
       row->primary, ReaderViewSemantic_Group,
       ReaderViewSemantic_Enabled, row->key);
     {
@@ -5246,6 +5287,7 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
   UI0ID find_tab_id = rv_id(202, 0);
   UI0ID left_title_id = rv_id(204, 0);
   UI0ID right_title_id = rv_id(301, 0);
+  UI0ID right_filter_id = rv_id(304, 0);
   UI0ID find_input_id = rv_id(220, 0);
   for (UI0S32 read_index = 0;
        read_index < ctx->draw.command_count;
@@ -5356,6 +5398,11 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
       command.stroke_width = rv_max(command.stroke_width, 1);
       command.flags |= UI0DrawFlag_RadiusExplicit;
       command.corner_radius = 4;
+    }
+    if (command.source_id == right_filter_id &&
+        command.op == UI0DrawOp_FocusRing)
+    {
+      command.rect = command.clip_rect;
     }
     if (command.source_id == progress_label_id &&
         command.op == UI0DrawOp_Text)

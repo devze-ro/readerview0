@@ -1597,6 +1597,13 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
     &frame, ReaderViewSemanticControl_FindRow, 30);
   check(row != 0 && rect_equal(row->rect, ui0_rect(104, 172, 308, 88)),
         "Find result uses frozen 88px row geometry");
+  fill = find_draw_for_rect(&frame, UI0DrawOp_ControlFill,
+                            ui0_rect(104, 259, 308, 1));
+  check(fill != 0 &&
+        fill->color == theme->colors[UI0ColorRole_BorderMuted] &&
+        fill->stroke_color == theme->colors[UI0ColorRole_BorderMuted] &&
+        rect_equal(fill->clip_rect, ui0_rect(104, 172, 308, 560)),
+        "Find result restores the frozen one-pixel muted divider");
   projection.find.active_index = 0;
   memset(&frame_input, 0, sizeof(frame_input));
   build_input.frame_index += 1;
@@ -1794,8 +1801,10 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
                                          filter->id) : 0;
   icon = filter ? find_icon_for_source(&frame, filter->id) : 0;
   check(fill != 0 && border != 0 && icon != 0 &&
-        icon->stroke_color == fill->color,
-        "Annotations filter restores its frozen outlined icon shell");
+        icon->stroke_color == fill->color &&
+        rect_equal(icon->rect, ui0_rect(1081, 69, 18, 18)),
+        "Annotations filter restores its frozen outlined 18px Select icon "
+        "shell");
   node = find_semantic_control_source(
     &frame, ReaderViewSemanticControl_RightExport, 0);
   check(node != 0 && rect_equal(node->rect, ui0_rect(1112, 66, 24, 24)) &&
@@ -1896,7 +1905,7 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
                                         node->id) : 0;
   check(command != 0 &&
-        rect_equal(command->rect, ui0_rect(1091, 142, 221, 16)) &&
+        rect_equal(command->rect, ui0_rect(1091, 144, 221, 20)) &&
         command->color == theme->colors[UI0ColorRole_TextSecondary] &&
         command->has_typography_role &&
         command->typography_role == UI0TypographyRole_Metadata,
@@ -1906,8 +1915,9 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
                                         node->id) : 0;
   check(command != 0 &&
-        rect_equal(command->rect, ui0_rect(1091, 164, 221, 16)),
-        "Annotations primary record restores the frozen eight-pixel inset");
+        rect_equal(command->rect, ui0_rect(1091, 170, 221, 20)),
+        "Annotations primary record restores the frozen centered 20px text "
+        "stack");
   right_rows[0].flags |= ReaderViewRow_Selected | ReaderViewRow_Starred;
   build_input.frame_index += 1;
   check(reader_view_build(&build_input, &storage, &frame),
@@ -2052,11 +2062,17 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   indicator = option ?
     find_draw_for_source(&frame, UI0DrawOp_IndicatorFill,
                          option->id) : 0;
+  command = option ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                           option->id) : 0;
   check(binding != 0 && text_equal(binding->text, "All (1)") &&
         indicator != 0 &&
         rect_equal(indicator->rect, ui0_rect(1086, 106, 3, 17)) &&
-        indicator->color == theme->colors[UI0ColorRole_Focus],
-        "Filter All publishes the exact counted label and selected rail");
+        indicator->color == theme->colors[UI0ColorRole_Focus] &&
+        command != 0 &&
+        rect_equal(command->rect, ui0_rect(1106, 100, 254, 29)) &&
+        rect_equal(command->clip_rect, ui0_rect(1096, 100, 274, 29)),
+        "Filter All publishes the exact counted label, selected rail, and "
+        "frozen ten-pixel text padding");
   option = find_semantic_control_source(
     &frame, ReaderViewSemanticControl_RightFilterOption,
     ReaderViewRightFilter_Highlights);
@@ -2112,10 +2128,19 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   build_input.frame_index += 1;
   check(reader_view_build(&build_input, &storage, &frame),
         "Filter popup Escape builds");
+  filter = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilter,
+    ReaderViewRightFilter_All);
+  command = filter ? find_draw_for_source(&frame, UI0DrawOp_FocusRing,
+                                           filter->id) : 0;
   check(state.popup == ReaderViewPopup_None &&
         state.restore_focus_id == 0 && filter &&
-        state.focus_id == filter->id,
-        "Filter Escape closes and restores the exact trigger");
+        state.focus_id == filter->id && state.focus_visible &&
+        (filter->flags & ReaderViewSemantic_Focused) != 0 && command != 0 &&
+        rect_equal(command->rect, ui0_rect(1078, 66, 24, 24)) &&
+        rect_equal(command->clip_rect, ui0_rect(1078, 66, 24, 24)),
+        "Filter Escape closes and restores the exact visibly focused "
+        "trigger ring");
 
   state.left_panel = ReaderViewLeftPanel_Contents;
   state.right_panel_open = 1;
