@@ -128,9 +128,11 @@ emits draw commands.
 Loaded toolbar geometry is a fixed twelve-slot row aligned to the right edge:
 eleven shared icon controls in the accepted order, then one host-owned trailing
 slot. Open is an empty-document action only. Visible controls are icon-only,
-while portable semantics keep their accessible names. `chrome_title` is an
-explicit portable projection distinct from `document_title`; readerview0 does
-not substitute the host document title into accepted chrome.
+while portable semantics keep their accessible names. Contents, Find, and
+Annotations use Selected as their sole open-state visual flag; the matching
+semantic nodes carry Selected and Expanded, never Checked. `chrome_title` is
+an explicit portable projection distinct from `document_title`; readerview0
+does not substitute the host document title into accepted chrome.
 
 The package may reserve page gutters and overlay/dock panel geometry, but it
 never draws EPUB content or owns document frames, decoded images,
@@ -195,6 +197,16 @@ join only the immediately preceding Highlight with the same nonzero color key
 and the same nonzero resolved rail color; malformed text and attachment
 projections fail closed without unsafe comparison.
 
+The frozen row-menu target keeps the standard 30 by 28 control shell and a
+centered literal ellipsis; the 20 px star target alone is shell-free. A row
+paints `UI0ColorRole_SurfaceElevated` only while hovered or active. Idle,
+selected-only, and focus-only rows have no fill or border, while semantic
+selection/focus and the focus ring remain published. The Annotations title and
+20 px section heading, like the visible Find-input text, each have one exact
+shared text draw and binding. Hosts own translation of those records through
+their concrete system-UI renderer, so glyph-raster differences are host adapter
+evidence rather than a reason to alter shared geometry or duplicate records.
+
 Ready annotation filters with no projected rows publish the localized frozen
 `No annotations`, `No bookmarks`, `No highlights`, or `No notes` status at the
 accepted filter-specific empty rect. These strings remain chrome labels, not
@@ -224,10 +236,15 @@ one-build lifetime even when projection, metric, or document validation fails.
 Opening newly laid-out Contents/Find defers its exact row/input handoff by one
 layout frame, while close, Escape, reset, and feature withdrawal cancel that
 bounded handoff. With an open document, withdrawing a panel's owning feature
-closes that panel and reports both state and layout change. Scroll input is
-applied exactly once; row/child paint and hit testing are clipped to the content
-viewport; scrollbar tracks cannot activate an underlying control; and losing a
-Ready scroll owner retires active-thumb/drag origins while preserving offset.
+closes that panel and reports both state and layout change. Each panel uses the
+full content viewport for paint, clipping, and hit testing. Frozen scrolling is
+wheel-only and hidden: it reserves no track width, emits no scrollbar or thumb
+record/draw, and publishes no invisible scrollbar signal target. One wheel
+delta is applied and clamped per build; focus is revealed or retired against
+the resulting publication. Losing a Ready scroll owner neutralizes obsolete
+public thumb/drag fields while preserving the bounded offset. With a panel
+open, normal-root Tab order remains Previous, Next, Progress, then the adjacent
+panel controls, and reverse Tab crosses the same boundary with visible focus.
 
 Panel visual copy and native names are distinct localized records. In
 particular the short `TOC` paint announces `Contents`, while close, search,

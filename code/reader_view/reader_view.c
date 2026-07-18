@@ -2733,6 +2733,11 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
   const ReaderViewLayout *layout = ctx->input->layout;
   UI0B32 document_open = rv_has_document_flag(
     projection, ReaderViewDocument_Open);
+  UI0B32 contents_open =
+    ctx->input->state->left_panel == ReaderViewLeftPanel_Contents;
+  UI0B32 find_open =
+    ctx->input->state->left_panel == ReaderViewLeftPanel_Find;
+  UI0B32 annotations_open = ctx->input->state->right_panel_open;
 
   if (!layout->toolbar_visible || layout->shared_toolbar_rect.w <= 0) return;
   ctx->toolbar_id = rv_id(1, 0);
@@ -2784,24 +2789,30 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
       rv_toolbar_icon_control(
         ctx, 11, ReaderViewSemanticControl_Contents, 0,
         labels.contents, rv_text(0, 0), 1,
-        ctx->input->state->left_panel == ReaderViewLeftPanel_Contents,
-        ctx->input->state->left_panel == ReaderViewLeftPanel_Contents,
-        ctx->input->state->left_panel == ReaderViewLeftPanel_Contents,
+        contents_open,
+        0,
+        0,
         UI0IconKind_List))
   {
     rv_toggle_left_panel(ctx, ReaderViewLeftPanel_Contents, rv_id(11, 0));
   }
+  if (contents_open)
+    rv_add_semantic_flags_for_id(ctx, rv_id(11, 0),
+                                 ReaderViewSemantic_Expanded);
   if (rv_has_feature(projection, ReaderViewFeature_Find) &&
       rv_toolbar_icon_control(
         ctx, 12, ReaderViewSemanticControl_Find, 1,
         labels.find, rv_text(0, 0), 1,
-        ctx->input->state->left_panel == ReaderViewLeftPanel_Find,
-        ctx->input->state->left_panel == ReaderViewLeftPanel_Find,
-        ctx->input->state->left_panel == ReaderViewLeftPanel_Find,
+        find_open,
+        0,
+        0,
         UI0IconKind_Search))
   {
     rv_toggle_left_panel(ctx, ReaderViewLeftPanel_Find, rv_id(12, 0));
   }
+  if (find_open)
+    rv_add_semantic_flags_for_id(ctx, rv_id(12, 0),
+                                 ReaderViewSemantic_Expanded);
   if (rv_has_feature(projection, ReaderViewFeature_History))
   {
     if (rv_toolbar_icon_control(
@@ -2871,13 +2882,16 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
       rv_toolbar_icon_control(
         ctx, 17, ReaderViewSemanticControl_Annotations, 9,
         labels.annotations, rv_text(0, 0), 1,
-        ctx->input->state->right_panel_open,
-        ctx->input->state->right_panel_open,
-        ctx->input->state->right_panel_open,
+        annotations_open,
+        0,
+        0,
         UI0IconKind_Notebook))
   {
     rv_toggle_right_panel(ctx, rv_id(17, 0));
   }
+  if (annotations_open)
+    rv_add_semantic_flags_for_id(ctx, rv_id(17, 0),
+                                 ReaderViewSemantic_Expanded);
 
   if (rv_has_feature(projection, ReaderViewFeature_Bookmark))
   {
@@ -3731,46 +3745,40 @@ rv_add_status(RVBuildContext *ctx,
 }
 
 static UI0S32
-rv_scroll_region(RVBuildContext *ctx,
-                 UI0ID id,
-                 UI0Rect viewport,
-                 UI0S32 content_h,
-                 UI0S32 *scroll_y,
-                 UI0ScrollState *state)
+rv_hidden_scroll_region(RVBuildContext *ctx,
+                        UI0Rect viewport,
+                        UI0S32 content_h,
+                        UI0S32 *scroll_y,
+                        UI0ScrollState *obsolete_interaction)
 {
-  UI0ScrollSpec spec;
-  UI0ScrollResult result;
-  UI0S32 old_scroll_y = *scroll_y;
-  UI0ScrollState old_state = *state;
-  memset(&spec, 0, sizeof(spec));
-  spec.id = id;
-  spec.root = UI0RootKind_Normal;
-  spec.viewport_rect = viewport;
-  spec.content_h = content_h;
-  spec.scroll_y = *scroll_y;
-  /* The shared signal input already contributes the frame wheel delta. */
-  spec.wheel_delta_y = 0;
-  result = ui0_scroll_region(&ctx->scrolls, &ctx->signals, spec, state);
-  *scroll_y = result.scroll_y;
-  if (*scroll_y != old_scroll_y ||
-      state->active_thumb_id != old_state.active_thumb_id ||
-      state->drag_start_pointer_y != old_state.drag_start_pointer_y ||
-      state->drag_start_scroll_y != old_state.drag_start_scroll_y)
+  UI0S32 old_scroll_y;
+  UI0S32 next_scroll_y;
+  UI0S32 max_scroll_y;
+  int64_t requested;
+  if (!ctx || !scroll_y) return 0;
+  old_scroll_y = *scroll_y;
+  max_scroll_y = ui0_scroll_max_y(viewport.h, content_h);
+  next_scroll_y = rv_clamp(old_scroll_y, 0, max_scroll_y);
+  rv_reset_scroll_interaction(obsolete_interaction, ctx->frame);
+  if (ctx->signals.input_root == UI0RootKind_Normal &&
+      ctx->signals.input.wheel_delta_y != 0 &&
+      ui0_rect_contains_point(viewport,
+                              ctx->signals.input.pointer_x,
+                              ctx->signals.input.pointer_y))
+  {
+    requested = (int64_t)next_scroll_y +
+                (int64_t)ctx->signals.input.wheel_delta_y;
+    if (requested < 0)
+      next_scroll_y = 0;
+    else if (requested > (int64_t)max_scroll_y)
+      next_scroll_y = max_scroll_y;
+    else
+      next_scroll_y = (UI0S32)requested;
+  }
+  *scroll_y = next_scroll_y;
+  if (next_scroll_y != old_scroll_y)
     ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
-  return result.scroll_y;
-}
-
-static UI0Rect
-rv_scroll_content_clip(const RVBuildContext *ctx, UI0Rect viewport)
-{
-  const UI0ScrollRecord *record;
-  UI0S32 right;
-  if (!ctx || ctx->scrolls.record_count <= 0) return viewport;
-  record = ctx->scrolls.records + (ctx->scrolls.record_count - 1);
-  if (!rv_rect_intersects(record->track_rect, viewport)) return viewport;
-  right = rv_min(viewport.x + viewport.w, record->track_rect.x);
-  return rv_rect(viewport.x, viewport.y,
-                 rv_max(right - viewport.x, 0), viewport.h);
+  return next_scroll_y;
 }
 
 static void
@@ -3830,10 +3838,9 @@ rv_build_toc_panel(RVBuildContext *ctx,
       break;
     }
   }
-  scroll_y = rv_scroll_region(ctx, rv_id(210, 0), visual_clip, content_h,
-                              &state->toc_scroll_y,
-                              &state->toc_scroll);
-  visual_clip = rv_scroll_content_clip(ctx, visual_clip);
+  scroll_y = rv_hidden_scroll_region(ctx, visual_clip, content_h,
+                                     &state->toc_scroll_y,
+                                     &state->toc_scroll);
   for (index = 0; index < toc->row_count; ++index)
   {
     const ReaderViewTocRow *row = toc->rows + index;
@@ -4243,9 +4250,10 @@ rv_build_find_panel(RVBuildContext *ctx,
       break;
     }
   }
-  scroll_y = rv_scroll_region(ctx, rv_id(225, 0), list_rect, content_h,
-                              &state->find_scroll_y, &state->find_scroll);
-  content_clip = rv_scroll_content_clip(ctx, list_rect);
+  scroll_y = rv_hidden_scroll_region(ctx, list_rect, content_h,
+                                     &state->find_scroll_y,
+                                     &state->find_scroll);
+  content_clip = list_rect;
   for (index = 0; index < find->row_count; ++index)
   {
     const ReaderViewFindRow *row = find->rows + index;
@@ -4752,9 +4760,10 @@ rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
          ReaderViewRow_AttachedToPrevious) == 0)
       row_y += RV_RIGHT_ROW_GAP;
   }
-  scroll_y = rv_scroll_region(ctx, rv_id(322, 0), list_rect, content_h,
-                              &state->right_scroll_y, &state->right_scroll);
-  content_clip = rv_scroll_content_clip(ctx, list_rect);
+  scroll_y = rv_hidden_scroll_region(ctx, list_rect, content_h,
+                                     &state->right_scroll_y,
+                                     &state->right_scroll);
+  content_clip = list_rect;
   row_y = list_rect.y - scroll_y;
   for (index = 0; index < right->row_count; ++index)
   {
@@ -5251,8 +5260,6 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
       rv_right_row_for_draw_source(ctx, command.source_id, 324);
     const ReaderViewRightRow *star_row =
       rv_right_row_for_draw_source(ctx, command.source_id, 325);
-    const ReaderViewRightRow *menu_row =
-      rv_right_row_for_draw_source(ctx, command.source_id, 326);
     for (visual_index = 0;
          visual_index < ctx->visual_fill_count;
          ++visual_index)
@@ -5279,17 +5286,14 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
     UI0B32 star_shell = star_row &&
       (command.op == UI0DrawOp_ControlFill ||
        command.op == UI0DrawOp_ControlBorder);
-    UI0B32 menu_shell = menu_row &&
-      (command.op == UI0DrawOp_ControlFill ||
-       command.op == UI0DrawOp_ControlBorder);
-    UI0B32 selected_right_fill = right_row &&
-      command.op == UI0DrawOp_ControlFill &&
-      (command.flags & UI0DrawFlag_Selected) != 0 &&
-      (command.flags & (UI0DrawFlag_Hovered | UI0DrawFlag_Active)) == 0;
+    UI0B32 right_row_shell = right_row &&
+      (command.op == UI0DrawOp_ControlBorder ||
+       (command.op == UI0DrawOp_ControlFill &&
+        (command.flags & (UI0DrawFlag_Hovered | UI0DrawFlag_Active)) == 0));
     UI0B32 manual_find_input = command.source_id == find_input_id;
     if (manual_find_input ||
         gutter_shell || hidden_progress_thumb || left_panel_shell ||
-        star_shell || menu_shell || selected_right_fill ||
+        star_shell || right_row_shell ||
         rv_has_sidenav_visual(ctx, command.source_id) ||
         (visual_fill && command.op != UI0DrawOp_ControlFill) ||
         ((command.source_id == contents_tab_id ||
@@ -5302,6 +5306,12 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
       command.stroke_color = visual_color;
       command.flags |= UI0DrawFlag_RadiusExplicit;
       command.corner_radius = 0;
+    }
+    if (right_row && command.op == UI0DrawOp_ControlFill)
+    {
+      command.color =
+        ctx->input->theme->colors[UI0ColorRole_SurfaceElevated];
+      command.stroke_color = command.color;
     }
     if (rv_source_is_find_row(ctx, command.source_id) &&
         command.op == UI0DrawOp_ControlFill)

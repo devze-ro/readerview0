@@ -25,7 +25,9 @@ Loaded chrome uses the fixed right-aligned icon order Contents, Find, Back,
 Forward, Full screen, Size, Spacing, Font, Theme, Annotations, and Bookmark,
 followed by the host-owned Exit slot. It does not show Open while a document is
 loaded. Icons retain explicit accessible labels. The caller supplies a
-portable `chrome_title` separately from the host-owned `document_title`.
+portable `chrome_title` separately from the host-owned `document_title`. An
+open Contents, Find, or Annotations trigger is visually Selected only; its
+portable semantic record carries Selected and Expanded, never Checked.
 
 The left panel reproduces the accepted shell-free 72 px TOC/Find rail and inset
 divider. TOC native semantic/focus rows use the frozen 32 px stride beginning
@@ -53,9 +55,12 @@ the localized empty-query and zero-match fallbacks, uses the frozen muted-body
 status line.
 
 The right panel reproduces the accepted filter/export/close header, sectioned
-58 px annotation rows, 14 px star paint, star/menu controls, and contained
-filter popup. Its row-action popup is anchored to the exact row menu, flips at
-the panel edge, and exposes the frozen Bookmark, Note, or Highlight action
+58 px annotation rows, 14 px shell-free star paint, standard 30 by 28 row-menu
+shell, and contained filter popup. An annotation row paints the resolved
+elevated-surface fill only while hovered or active; idle, selected-only, and
+focus-only rows remain fill-free while retaining semantic selection/focus and
+the focus ring. Its row-action popup is anchored to the exact row menu, flips
+at the panel edge, and exposes the frozen Bookmark, Note, or Highlight action
 matrix. Every kind retains its inline star; only Highlight carries Star in the
 popup. The four filter labels are composed as bounded
 `Label (caller_count)` records in caller-owned frame storage. Hosts project
@@ -68,6 +73,12 @@ remain in the applications. Ready-empty filters use the localized frozen
 Direct row activation owns bounded shared selection; popup Go To navigates
 without changing it. Visual abbreviations and native panel-control names are
 separate localized records.
+
+Shared records contain exactly one visible Find-input text draw, Annotations
+title draw, and Annotations section-heading draw at the frozen rectangles.
+Painting those bound system-UI glyphs is a host renderer responsibility, so a
+missing or mismatched host raster is an adapter seam rather than absent shared
+chrome.
 
 Changing or removing an open annotation row's menu membership closes the
 stale popup before publication and clears popup-owned interaction state.
@@ -88,14 +99,20 @@ after publishing records; an accessibility focus/invoke request is consumed by
 that build even when validation fails and never replays after repair. Opening a
 newly laid-out TOC/Find panel uses one bounded deferred-focus field that close,
 Escape, reset, and feature withdrawal clear. TOC, Find, and Annotations scroll
-regions clip row/child paint and pointer targets to the content viewport,
-exclude the scrollbar track from activation, apply each wheel delta once, and
-retire interrupted thumb-drag ownership without discarding the scroll offset.
+regions use the full content viewport and frozen hidden wheel scrolling. They
+reserve no eight-pixel track, emit no scrollbar track/thumb record or draw,
+publish no invisible scrollbar hit target, apply each wheel delta exactly once,
+clamp the bounded offset, reveal keyboard/native focus, and retire focus that
+scrolls out of publication. Obsolete public UI0 scroll drag fields are
+neutralized without discarding the offset when a scroll owner closes or leaves
+Ready state.
 
 Previous/next gutters use UI0's exact 18 by 32 filled PageCaret identities
 inside the frozen 44 by 88 visual targets. Their large semantic/hit rectangles,
 disabled action eligibility, and clipped 48 by 92 focus boundary remain
-separate records.
+separate records. With any reference panel open, forward Tab order remains
+Previous, Next, Progress, then the adjacent panel records; reverse Tab crosses
+the same Progress boundary with visible portable focus.
 
 The API supports the current re10 feature set without requiring every host to
 provide it: Open, page and history navigation, TOC, Find, progress seeking, the

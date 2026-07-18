@@ -23,15 +23,6 @@ rect_equal(UI0Rect a, UI0Rect b)
   return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
 }
 
-static int
-rect_within(UI0Rect inner, UI0Rect outer)
-{
-  return inner.w >= 0 && inner.h >= 0 &&
-         inner.x >= outer.x && inner.y >= outer.y &&
-         inner.x + inner.w <= outer.x + outer.w &&
-         inner.y + inner.h <= outer.y + outer.h;
-}
-
 static ReaderViewSurfaceStatus
 ready_status(void)
 {
@@ -189,6 +180,16 @@ count_draw_op_for_source(const ReaderViewFrame *frame,
   return result;
 }
 
+static UI0S32
+count_draw_op(const ReaderViewFrame *frame, UI0DrawOpKind op)
+{
+  UI0S32 index;
+  UI0S32 result = 0;
+  for (index = 0; index < frame->draw_command_count; ++index)
+    if (frame->draw_commands[index].op == op) result += 1;
+  return result;
+}
+
 static const UI0DrawCommand *
 find_icon_for_source(const ReaderViewFrame *frame, UI0ID source_id)
 {
@@ -251,20 +252,15 @@ find_control_for_source(const ReaderViewFrameStorage *storage, UI0ID source_id)
   return 0;
 }
 
-static const UI0ScrollRecord *
-find_scroll_record_on_side(const ReaderViewFrameStorage *storage,
-                           UI0S32 split_x,
-                           UI0B32 right_side)
+static int
+scroll_records_empty(const ReaderViewFrameStorage *storage)
 {
   UI0S32 index;
   for (index = 0; index < READER_VIEW_SCROLL_CAP; ++index)
   {
-    const UI0ScrollRecord *record = storage->scroll_records + index;
-    if (record->id != 0 &&
-        ((record->track_rect.x >= split_x) != 0) == (right_side != 0))
-      return record;
+    if (storage->scroll_records[index].id != 0) return 0;
   }
-  return 0;
+  return 1;
 }
 
 static const ReaderViewTextBinding *
@@ -870,6 +866,7 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   const UI0DrawCommand *border;
   const UI0DrawCommand *icon;
   const UI0DrawCommand *indicator;
+  const UI0ControlRecord *control;
   const UI0TextInputRecord *input_record;
   const ReaderViewAction *action;
   UI0Rect rect;
@@ -973,6 +970,24 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   build_input.frame_index += 1;
   check(reader_view_build(&build_input, &storage, &frame),
         "Contents accepted frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_Contents, 0);
+  control = node ? find_control_for_source(&storage, node->id) : 0;
+  fill = node ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                     node->id) : 0;
+  check(node != 0 && control != 0 && fill != 0 &&
+        (node->flags & (ReaderViewSemantic_Selected |
+                        ReaderViewSemantic_Expanded)) ==
+          (ReaderViewSemantic_Selected | ReaderViewSemantic_Expanded) &&
+        (node->flags & ReaderViewSemantic_Checked) == 0 &&
+        (control->state & UI0ControlState_Selected) != 0 &&
+        (control->state & (UI0ControlState_Checked | UI0ControlState_On |
+                           UI0ControlState_Open)) == 0 &&
+        (fill->flags & UI0DrawFlag_Selected) != 0 &&
+        (fill->flags & (UI0DrawFlag_Checked | UI0DrawFlag_On |
+                        UI0DrawFlag_Open)) == 0,
+        "open Contents keeps semantic selected/expanded state while its "
+        "frozen UI0 visual state is selected-only");
   node = find_semantic_control_source(
     &frame, ReaderViewSemanticControl_LeftPanelClose, 0);
   check(node != 0 && rect_equal(node->rect, ui0_rect(398, 66, 24, 24)) &&
@@ -1131,8 +1146,8 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
 
   {
     ReaderViewTocRow long_toc_rows[32];
-    UI0S32 row_text_index;
-    UI0S32 scroll_thumb_index;
+    const UI0ControlRecord *row_control;
+    const UI0DrawCommand *row_text;
     memset(long_toc_rows, 0, sizeof(long_toc_rows));
     for (index = 0; index < 32; ++index)
     {
@@ -1153,12 +1168,19 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
           "long Contents scroll-layer frame builds");
     row = find_semantic_control_source(
       &frame, ReaderViewSemanticControl_TocRow, 1000);
-    row_text_index = row ? find_draw_index_for_source(
-      &frame, UI0DrawOp_Text, row->id) : -1;
-    scroll_thumb_index = find_draw_index_for_source(
-      &frame, UI0DrawOp_ScrollThumb, storage.scroll_records[0].id);
-    check(row_text_index >= 0 && scroll_thumb_index > row_text_index,
-          "Contents scroll thumb draws above Sidenav rows and below popups");
+    row_control = row ? find_control_for_source(&storage, row->id) : 0;
+    row_text = row ? find_draw_for_source(
+      &frame, UI0DrawOp_Text, row->id) : 0;
+    check(row_control != 0 && row_text != 0 &&
+          row_control->clip_rect.x == row_control->rect.x &&
+          row_control->clip_rect.w == row_control->rect.w &&
+          row_text->clip_rect.x == row_control->clip_rect.x &&
+          row_text->clip_rect.w == row_control->clip_rect.w &&
+          scroll_records_empty(&storage) &&
+          count_draw_op(&frame, UI0DrawOp_ScrollTrack) == 0 &&
+          count_draw_op(&frame, UI0DrawOp_ScrollThumb) == 0,
+          "long Contents keeps full-width rows and the frozen hidden-scroll "
+          "surface without a track or thumb");
   }
 
   projection.toc.rows = 0;
@@ -1223,6 +1245,24 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   build_input.frame_index = 1050;
   check(reader_view_build(&build_input, &storage, &frame),
         "Find accepted frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_Find, 0);
+  control = node ? find_control_for_source(&storage, node->id) : 0;
+  fill = node ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                     node->id) : 0;
+  check(node != 0 && control != 0 && fill != 0 &&
+        (node->flags & (ReaderViewSemantic_Selected |
+                        ReaderViewSemantic_Expanded)) ==
+          (ReaderViewSemantic_Selected | ReaderViewSemantic_Expanded) &&
+        (node->flags & ReaderViewSemantic_Checked) == 0 &&
+        (control->state & UI0ControlState_Selected) != 0 &&
+        (control->state & (UI0ControlState_Checked | UI0ControlState_On |
+                           UI0ControlState_Open)) == 0 &&
+        (fill->flags & UI0DrawFlag_Selected) != 0 &&
+        (fill->flags & (UI0DrawFlag_Checked | UI0DrawFlag_On |
+                        UI0DrawFlag_Open)) == 0,
+        "open Find keeps semantic selected/expanded state while its frozen "
+        "UI0 visual state is selected-only");
   node = find_semantic_control_source(
     &frame, ReaderViewSemanticControl_FindInput, 0);
   find_input_id = node ? node->id : 0;
@@ -1366,9 +1406,12 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
         input_record->selection_start == 0 &&
         input_record->selection_end == 0 &&
         command != 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_Text,
+                                 find_input_id) == 1 &&
         rect_equal(command->rect, ui0_rect(112, 104, 40, 34)) &&
         rect_equal(command->clip_rect, ui0_rect(112, 104, 258, 34)),
-        "Find current query is drawn from the bounded UI0 input record");
+        "Find current query has exactly one text draw from the bounded UI0 "
+        "input record");
   memset(&frame_input, 0, sizeof(frame_input));
   frame_input.find_text.select_all = 1;
   build_input.frame_index += 1;
@@ -1466,6 +1509,8 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
                                         node->id) : 0;
   check(command != 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_Text,
+                                 node ? node->id : 0) == 1 &&
         rect_equal(command->rect, ui0_rect(104, 68, 284, 24)) &&
         command->has_typography_role &&
         command->typography_role == UI0TypographyRole_SectionTitle,
@@ -1719,6 +1764,24 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   build_input.frame_index += 1;
   check(reader_view_build(&build_input, &storage, &frame),
         "Annotations accepted frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_Annotations, 0);
+  control = node ? find_control_for_source(&storage, node->id) : 0;
+  fill = node ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                     node->id) : 0;
+  check(node != 0 && control != 0 && fill != 0 &&
+        (node->flags & (ReaderViewSemantic_Selected |
+                        ReaderViewSemantic_Expanded)) ==
+          (ReaderViewSemantic_Selected | ReaderViewSemantic_Expanded) &&
+        (node->flags & ReaderViewSemantic_Checked) == 0 &&
+        (control->state & UI0ControlState_Selected) != 0 &&
+        (control->state & (UI0ControlState_Checked | UI0ControlState_On |
+                           UI0ControlState_Open)) == 0 &&
+        (fill->flags & UI0DrawFlag_Selected) != 0 &&
+        (fill->flags & (UI0DrawFlag_Checked | UI0DrawFlag_On |
+                        UI0DrawFlag_Open)) == 0,
+        "open Annotations keeps semantic selected/expanded state while its "
+        "frozen UI0 visual state is selected-only");
   filter = find_semantic_control_source(
     &frame, ReaderViewSemanticControl_RightFilter,
     ReaderViewRightFilter_All);
@@ -1764,6 +1827,8 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
                                         node->id) : 0;
   check(command != 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_Text,
+                                 node ? node->id : 0) == 1 &&
         rect_equal(command->rect, ui0_rect(1156, 64, 186, 28)) &&
         command->has_typography_role &&
         command->typography_role == UI0TypographyRole_SectionTitle,
@@ -1773,6 +1838,8 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
                                         node->id) : 0;
   binding = node ? find_text_binding(&frame, node->id) : 0;
   check(command != 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_Text,
+                                 node ? node->id : 0) == 1 &&
         rect_equal(command->rect, ui0_rect(1078, 106, 300, 20)) &&
         binding != 0 &&
         binding->style == ReaderViewTextStyle_ChromeTitle,
@@ -1802,21 +1869,28 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   check(node != 0 && rect_equal(node->rect, ui0_rect(1340, 147, 30, 28)) &&
         text_equal(node->name, "Annotation actions"),
         "Annotations row menu uses the frozen target and native name");
+  fill = node ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                     node->id) : 0;
+  border = node ? find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
+                                       node->id) : 0;
   command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
                                         node->id) : 0;
   binding = node ? find_text_binding(&frame, node->id) : 0;
-  check(command != 0 &&
+  check(fill != 0 && border != 0 && command != 0 &&
+        rect_equal(fill->rect, ui0_rect(1340, 147, 30, 28)) &&
+        rect_equal(border->rect, ui0_rect(1340, 147, 30, 28)) &&
         rect_equal(command->rect, ui0_rect(1344, 147, 22, 28)) &&
+        rect_equal(command->clip_rect, ui0_rect(1340, 147, 30, 28)) &&
         command->has_text_alignment &&
         command->text_align_x == UI0TextAlignX_Center &&
         binding != 0 && text_equal(binding->text, "...") &&
         find_icon_for_source(&frame, node ? node->id : 0) == 0 &&
         count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
-                                 node ? node->id : 0) == 0 &&
+                                 node ? node->id : 0) == 1 &&
         count_draw_op_for_source(&frame, UI0DrawOp_ControlBorder,
-                                 node ? node->id : 0) == 0,
+                                 node ? node->id : 0) == 1,
         "Annotations row menu restores the frozen centered literal ellipsis "
-        "without an icon or button shell");
+        "inside the standard clipped 30px menu-trigger shell");
   node = find_semantic_role(&frame, "Bookmark - re10 loc 1",
                             ReaderViewSemantic_Group);
   command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
@@ -1844,6 +1918,7 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
     &frame, ReaderViewSemanticControl_RightRowStar, 40);
   icon = node ? find_icon_for_source(&frame, node->id) : 0;
   check(row != 0 &&
+        (row->flags & ReaderViewSemantic_Selected) != 0 &&
         count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
                                  row->id) == 0 &&
         icon != 0 && icon->color == theme->colors[UI0ColorRole_Focus],
@@ -1856,15 +1931,63 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   row = find_semantic_control_source(
     &frame, ReaderViewSemanticControl_RightRow, 40);
   right_id = row ? row->id : 0;
+  check(row != 0 && reader_view_accessibility_focus(&state, row->id),
+        "Annotations row accepts focus-only visual coverage");
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations focus-only visual frame builds");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRow, 40);
+  check(row != 0 &&
+        (row->flags & ReaderViewSemantic_Focused) != 0 &&
+        (row->flags & ReaderViewSemantic_Selected) == 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                 row->id) == 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_FocusRing,
+                                 row->id) == 1,
+        "Annotations focus-only row preserves semantic/focus-ring evidence "
+        "without inventing a row fill");
   if (row)
   {
     rect = row->rect;
+    frame_input.ui = ui0_input_pointer(rect.x + 100,
+                                       rect.y + rect.h / 2,
+                                       0, 0, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Annotations row hover builds");
+    row = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightRow, 40);
+    fill = row ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                      row->id) : 0;
+    check(fill != 0 &&
+          fill->color == theme->colors[UI0ColorRole_SurfaceElevated] &&
+          fill->stroke_color ==
+            theme->colors[UI0ColorRole_SurfaceElevated] &&
+          count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                   row ? row->id : 0) == 1 &&
+          count_draw_op_for_source(&frame, UI0DrawOp_ControlBorder,
+                                   row ? row->id : 0) == 0,
+          "Annotations hover uses the frozen elevated-surface fill without "
+          "a row border");
     frame_input.ui = ui0_input_pointer(rect.x + 100,
                                        rect.y + rect.h / 2,
                                        1, 1, 0);
     build_input.frame_index += 1;
     check(reader_view_build(&build_input, &storage, &frame),
           "Annotations row press builds");
+    row = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightRow, 40);
+    fill = row ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                      row->id) : 0;
+    check(fill != 0 &&
+          fill->color == theme->colors[UI0ColorRole_SurfaceElevated] &&
+          fill->stroke_color ==
+            theme->colors[UI0ColorRole_SurfaceElevated] &&
+          count_draw_op_for_source(&frame, UI0DrawOp_ControlBorder,
+                                   row ? row->id : 0) == 0,
+          "Annotations active row retains the frozen elevated-surface fill "
+          "without a row border");
     frame_input.ui = ui0_input_pointer(rect.x + 100,
                                        rect.y + rect.h / 2,
                                        0, 0, 1);
@@ -3205,6 +3328,116 @@ test_focus_root_and_refresh_lifecycle(const UI0ResolvedTheme *theme)
 }
 
 static void
+test_open_panel_focus_boundaries(const UI0ResolvedTheme *theme)
+{
+  typedef struct PanelFocusCase
+  {
+    ReaderViewLeftPanelMode left_panel;
+    UI0B32 right_panel_open;
+    ReaderViewSemanticControl panel_entry;
+  } PanelFocusCase;
+  static const PanelFocusCase cases[] = {
+    { ReaderViewLeftPanel_Contents, 0,
+      ReaderViewSemanticControl_LeftContentsTab },
+    { ReaderViewLeftPanel_Find, 0,
+      ReaderViewSemanticControl_LeftContentsTab },
+    { ReaderViewLeftPanel_None, 1,
+      ReaderViewSemanticControl_RightFilter },
+  };
+  static ReaderViewState state;
+  static ReaderViewFrameStorage storage;
+  ReaderViewSettingControl settings[READER_VIEW_SETTING_CAP];
+  ReaderViewChoice choices[8];
+  ReaderViewTocRow toc_rows[2];
+  ReaderViewFindRow find_rows[1];
+  ReaderViewRightRow right_rows[1];
+  ReaderViewCodepointAdvance advances[127];
+  ReaderViewProjection projection = full_projection(
+    settings, choices, toc_rows, find_rows, right_rows);
+  ReaderViewLayoutInput layout_input;
+  ReaderViewLayout layout;
+  ReaderViewInput input;
+  ReaderViewFrame frame;
+  UI0U64 frame_index = 800;
+  UI0S32 index;
+
+  memset(&layout_input, 0, sizeof(layout_input));
+  layout_input.bounds = ui0_rect(0, 0, 1400, 800);
+  for (index = 0;
+       index < (UI0S32)(sizeof(cases) / sizeof(cases[0]));
+       ++index)
+  {
+    const ReaderViewSemanticNode *node;
+    UI0ID previous_id;
+    UI0ID next_id;
+    UI0ID progress_id;
+    UI0ID panel_entry_id;
+
+    memset(&input, 0, sizeof(input));
+    reader_view_state_reset_document(&state, projection.document_key);
+    state.left_panel = cases[index].left_panel;
+    state.right_panel_open = cases[index].right_panel_open;
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "open-panel focus boundary seed builds");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_PreviousPage, 0);
+    previous_id = node ? node->id : 0;
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_NextPage, 0);
+    next_id = node ? node->id : 0;
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_Progress, 0);
+    progress_id = node ? node->id : 0;
+    node = find_semantic_control_source(
+      &frame, cases[index].panel_entry, 0);
+    panel_entry_id = node ? node->id : 0;
+    check(previous_id != 0 && next_id != 0 && progress_id != 0 &&
+          panel_entry_id != 0,
+          "open-panel focus boundary publishes gutters, progress, and panel entry");
+
+    check(reader_view_accessibility_focus(&state, previous_id) &&
+          lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "open-panel Previous focus builds");
+    check(state.focus_id == previous_id && state.focus_visible,
+          "open-panel Previous starts the gutter boundary visibly focused");
+
+    input.ui = ui0_input_keyboard(0, 1, 0);
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "open-panel Tab to Next builds");
+    check(state.focus_id == next_id && state.focus_visible,
+          "open-panel Tab retains Previous, Next ordering");
+
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "open-panel Tab to Progress builds");
+    check(state.focus_id == progress_id && state.focus_visible,
+          "open-panel Tab retains Next, Progress ordering");
+
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "open-panel Tab into panel builds");
+    node = find_semantic_control_source(
+      &frame, cases[index].panel_entry, 0);
+    check(node && state.focus_id == panel_entry_id && state.focus_visible &&
+          (node->flags & ReaderViewSemantic_Focused) != 0,
+          "open-panel Tab enters the adjacent panel record with visible focus");
+
+    input.ui = ui0_input_keyboard(0, 0, 1);
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "open-panel reverse Tab to Progress builds");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_Progress, 0);
+    check(node && state.focus_id == progress_id && state.focus_visible &&
+          (node->flags & ReaderViewSemantic_Focused) != 0,
+          "open-panel reverse Tab leaves the panel for Progress visibly focused");
+  }
+}
+
+static void
 test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
 {
   static ReaderViewState state;
@@ -3769,10 +4002,9 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
 
   {
     static ReaderViewTocRow long_toc[32];
+    const UI0ControlRecord *row_control;
     UI0S32 index;
     UI0S32 retained_scroll;
-    UI0Rect track;
-    UI0Rect thumb;
     for (index = 0; index < 32; ++index)
     {
       memset(long_toc + index, 0, sizeof(long_toc[index]));
@@ -3792,6 +4024,10 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++),
           "single-delta Contents scroll seed builds");
+    check(scroll_records_empty(&storage) &&
+          count_draw_op(&frame, UI0DrawOp_ScrollTrack) == 0 &&
+          count_draw_op(&frame, UI0DrawOp_ScrollThumb) == 0,
+          "Contents publishes no visible or interactive scrollbar records");
     input.ui.pointer_x = layout.left_panel_rect.x + 100;
     input.ui.pointer_y = layout.left_panel_rect.y + 180;
     input.ui.wheel_delta_y = 17;
@@ -3800,25 +4036,68 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
           state.toc_scroll_y == 17 &&
           (frame.change_flags & ReaderViewFrameChange_StateChanged) != 0,
           "Contents wheel delta applies exactly once and reports state change");
-    track = storage.scroll_records[0].track_rect;
-    memset(&input, 0, sizeof(input));
-    input.ui.pointer_x = track.x + track.w / 2;
-    input.ui.pointer_y = track.y + track.h / 2;
-    input.ui.flags = UI0Input_PointerPressed | UI0Input_PointerDown;
-    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
-                          theme, advances, &storage, &frame, frame_index++) &&
-          find_action(&frame, ReaderViewAction_ActivateTocRow) == 0,
-          "Contents scrollbar press cannot leak into an overlapping row action");
-    input.ui = ui0_input_pointer(track.x + track.w / 2,
-                                 track.y + track.h / 2,
-                                 0, 0, 1);
-    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
-                          theme, advances, &storage, &frame, frame_index++) &&
-          find_action(&frame, ReaderViewAction_ActivateTocRow) == 0,
-          "Contents scrollbar release cannot activate an overlapping row");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_TocRow, 1000);
+    row_control = node ? find_control_for_source(&storage, node->id) : 0;
+    check(row_control != 0 &&
+          row_control->clip_rect.x == row_control->rect.x &&
+          row_control->clip_rect.w == row_control->rect.w,
+          "scrolled Contents keeps its partial row clipped at full width");
+    if (row_control)
+      input.ui = ui0_input_pointer(
+        row_control->clip_rect.x + row_control->clip_rect.w - 2,
+        row_control->clip_rect.y + row_control->clip_rect.h / 2,
+        1, 1, 0);
+    check(row_control && lifecycle_build(
+            &state, &layout_input, &layout, &projection, &input,
+            theme, advances, &storage, &frame, frame_index++),
+          "Contents full-width right-edge press builds without a track owner");
+    if (row_control)
+      input.ui = ui0_input_pointer(
+        row_control->clip_rect.x + row_control->clip_rect.w - 2,
+        row_control->clip_rect.y + row_control->clip_rect.h / 2,
+        0, 0, 1);
+    check(row_control && lifecycle_build(
+            &state, &layout_input, &layout, &projection, &input,
+            theme, advances, &storage, &frame, frame_index++) &&
+          find_action(&frame, ReaderViewAction_ActivateTocRow) != 0 &&
+          find_action(&frame, ReaderViewAction_ActivateTocRow)->key == 1000,
+          "Contents old track stripe belongs to the full-width row hit target");
 
     memset(&input, 0, sizeof(input));
     state.toc_scroll_y = 0;
+    input.ui = ui0_input_pointer_wheel(
+      layout.left_panel_rect.x + 100,
+      layout.left_panel_rect.y + 180, 0, 0, 0, 0, INT32_MAX);
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.toc_scroll_y == 438,
+          "Contents hidden wheel scrolling clamps safely at its exact maximum");
+    input.ui.wheel_delta_y = INT32_MIN;
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.toc_scroll_y == 0,
+          "Contents hidden wheel scrolling clamps safely back to zero");
+
+    state.popup = ReaderViewPopup_SettingMenu;
+    state.active_setting_kind = ReaderViewSetting_FontFamily;
+    retained_scroll = state.toc_scroll_y;
+    input.ui = ui0_input_pointer_wheel(
+      layout.left_panel_rect.x + 100,
+      layout.left_panel_rect.y + 180, 0, 0, 0, 0, 40);
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.popup == ReaderViewPopup_SettingMenu &&
+          state.toc_scroll_y == retained_scroll,
+          "popup root blocks hidden Contents wheel scrolling underneath it");
+    state.popup = ReaderViewPopup_None;
+    state.active_setting_kind = ReaderViewSetting_FontFamily;
+    state.restore_focus_id = 0;
+
+    memset(&input, 0, sizeof(input));
+    state.toc_scroll_y = 0;
+    state.focus_id = 0;
+    state.focus_visible = 0;
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++),
           "wheel-hidden Contents focus seed builds");
@@ -3828,9 +4107,9 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
           lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++),
           "wheel-hidden Contents row focus builds");
-    track = storage.scroll_records[0].viewport_rect;
     input.ui = ui0_input_pointer_wheel(
-      track.x + track.w / 2, track.y + track.h / 2,
+      layout.left_panel_rect.x + 100,
+      layout.left_panel_rect.y + 180,
       0, 0, 0, 0, 1000);
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++) &&
@@ -3850,48 +4129,46 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
     projection.toc.row_count = 32;
     projection.toc.total_count = 32;
 
+    state.toc_scroll.active_thumb_id = 91;
+    state.toc_scroll.drag_start_pointer_y = 120;
+    state.toc_scroll.drag_start_scroll_y = 30;
+    retained_scroll = state.toc_scroll_y;
     memset(&input, 0, sizeof(input));
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
-                          theme, advances, &storage, &frame, frame_index++),
-          "Contents thumb-owner reset seed builds");
-    thumb = storage.scroll_records[0].thumb_rect;
-    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
-                                 thumb.y + thumb.h / 2,
-                                 1, 1, 0);
-    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++) &&
-          state.toc_scroll.active_thumb_id != 0,
-          "Contents thumb press owns its bounded drag state");
-    retained_scroll = state.toc_scroll_y;
+          state.toc_scroll.active_thumb_id == 0 &&
+          state.toc_scroll.drag_start_pointer_y == 0 &&
+          state.toc_scroll.drag_start_scroll_y == 0 &&
+          state.toc_scroll_y == retained_scroll &&
+          (frame.change_flags & ReaderViewFrameChange_StateChanged) != 0,
+          "ready Contents retires obsolete thumb state without losing offset");
+    state.toc_scroll.active_thumb_id = 92;
+    state.toc_scroll.drag_start_pointer_y = 121;
+    state.toc_scroll.drag_start_scroll_y = 31;
     projection.toc.status.state = ReaderViewLoad_Loading;
-    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
-                                 thumb.y + thumb.h / 2 + 40,
-                                 1, 0, 0);
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++) &&
           state.toc_scroll.active_thumb_id == 0 &&
           state.toc_scroll.drag_start_pointer_y == 0 &&
           state.toc_scroll.drag_start_scroll_y == 0 &&
           state.toc_scroll_y == retained_scroll,
-          "Loading Contents retires thumb drag ownership but keeps scroll");
+          "Loading Contents retires obsolete interaction state but keeps scroll");
     projection.toc.status = ready_status();
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++) &&
           state.toc_scroll.active_thumb_id == 0 &&
-          state.toc_scroll_y == retained_scroll,
-          "ready Contents cannot resume a drag without a new press");
+          state.toc_scroll_y == retained_scroll &&
+          scroll_records_empty(&storage),
+          "ready Contents cannot revive retired thumb or track ownership");
   }
 
   {
     static ReaderViewFindRow long_find[16];
-    const UI0ScrollRecord *scroll;
     const UI0ControlRecord *row_control;
     const UI0ControlRecord *section_control;
     const UI0ControlRecord *excerpt_control;
     const UI0DrawCommand *section_draw;
     const UI0DrawCommand *excerpt_draw;
-    UI0Rect content_clip;
-    UI0Rect thumb;
     UI0S32 index;
     UI0S32 retained_scroll;
     for (index = 0; index < 16; ++index)
@@ -3918,24 +4195,20 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++),
           "long Find scroll seed frame builds");
-    scroll = find_scroll_record_on_side(
-      &storage, layout.bounds.x + layout.bounds.w / 2, 0);
-    if (scroll)
-      input.ui = ui0_input_pointer_wheel(
-        scroll->viewport_rect.x + scroll->viewport_rect.w / 2,
-        scroll->viewport_rect.y + scroll->viewport_rect.h / 2,
-        0, 0, 0, 0, 17);
-    check(scroll && lifecycle_build(
+    check(scroll_records_empty(&storage) &&
+          count_draw_op(&frame, UI0DrawOp_ScrollTrack) == 0 &&
+          count_draw_op(&frame, UI0DrawOp_ScrollThumb) == 0,
+          "Find publishes no visible or interactive scrollbar records");
+    input.ui = ui0_input_pointer_wheel(
+      layout.left_panel_rect.x + 160,
+      layout.left_panel_rect.y + 180,
+      0, 0, 0, 0, 17);
+    check(lifecycle_build(
             &state, &layout_input, &layout, &projection, &input,
             theme, advances, &storage, &frame, frame_index++) &&
           state.find_scroll_y == 17 &&
           (frame.change_flags & ReaderViewFrameChange_StateChanged) != 0,
           "Find wheel delta applies exactly once and reports state change");
-    scroll = find_scroll_record_on_side(
-      &storage, layout.bounds.x + layout.bounds.w / 2, 0);
-    content_clip = scroll ? scroll->viewport_rect : ui0_rect(0, 0, 0, 0);
-    if (scroll)
-      content_clip.w = scroll->track_rect.x - content_clip.x;
     node = find_semantic_control_source(
       &frame, ReaderViewSemanticControl_FindRow, 2000);
     row_control = node ? find_control_for_source(&storage, node->id) : 0;
@@ -3948,42 +4221,47 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
     excerpt_control = node ? find_control_for_source(&storage, node->id) : 0;
     excerpt_draw = node ? find_draw_for_source(
       &frame, UI0DrawOp_Text, node->id) : 0;
-    check(scroll && row_control && section_control && excerpt_control &&
+    check(row_control && section_control && excerpt_control &&
           section_draw && excerpt_draw &&
           row_control->clip_rect.h > 0 &&
           row_control->clip_rect.h < row_control->rect.h &&
           section_control->clip_rect.h > 0 &&
           section_control->clip_rect.h < section_control->rect.h &&
-          rect_within(row_control->clip_rect, content_clip) &&
-          rect_within(section_control->clip_rect, content_clip) &&
-          rect_within(excerpt_control->clip_rect, content_clip) &&
-          rect_within(section_draw->clip_rect, content_clip) &&
-          rect_within(excerpt_draw->clip_rect, content_clip),
-          "partial Find row and child paint/control clips exclude its track");
-    if (scroll)
+          row_control->clip_rect.x == row_control->rect.x &&
+          row_control->clip_rect.w == row_control->rect.w &&
+          section_control->clip_rect.x == section_control->rect.x &&
+          section_control->clip_rect.w == section_control->rect.w &&
+          excerpt_control->clip_rect.x == excerpt_control->rect.x &&
+          excerpt_control->clip_rect.w == excerpt_control->rect.w &&
+          rect_equal(section_draw->clip_rect, section_control->clip_rect) &&
+          rect_equal(excerpt_draw->clip_rect, excerpt_control->clip_rect),
+          "partial Find row and child paint/control clips retain the full "
+          "frozen width");
+    if (row_control)
       input.ui = ui0_input_pointer(
-        scroll->track_rect.x + scroll->track_rect.w / 2,
-        scroll->track_rect.y + scroll->track_rect.h / 2,
+        row_control->clip_rect.x + row_control->clip_rect.w - 2,
+        row_control->clip_rect.y + row_control->clip_rect.h / 2,
         1, 1, 0);
-    check(scroll && lifecycle_build(
+    check(row_control && lifecycle_build(
             &state, &layout_input, &layout, &projection, &input,
             theme, advances, &storage, &frame, frame_index++) &&
           find_action(&frame, ReaderViewAction_ActivateFindRow) == 0 &&
           find_action(&frame, ReaderViewAction_FindChanged) == 0 &&
           find_action(&frame, ReaderViewAction_FindCommitted) == 0,
-          "Find scrollbar press cannot leak into row/input actions");
-    if (scroll)
+          "Find full-width right-edge press has no hidden track owner");
+    if (row_control)
       input.ui = ui0_input_pointer(
-        scroll->track_rect.x + scroll->track_rect.w / 2,
-        scroll->track_rect.y + scroll->track_rect.h / 2,
+        row_control->clip_rect.x + row_control->clip_rect.w - 2,
+        row_control->clip_rect.y + row_control->clip_rect.h / 2,
         0, 0, 1);
-    check(scroll && lifecycle_build(
+    check(row_control && lifecycle_build(
             &state, &layout_input, &layout, &projection, &input,
             theme, advances, &storage, &frame, frame_index++) &&
-          find_action(&frame, ReaderViewAction_ActivateFindRow) == 0 &&
+          find_action(&frame, ReaderViewAction_ActivateFindRow) != 0 &&
+          find_action(&frame, ReaderViewAction_ActivateFindRow)->key == 2000 &&
           find_action(&frame, ReaderViewAction_FindChanged) == 0 &&
           find_action(&frame, ReaderViewAction_FindCommitted) == 0,
-          "Find scrollbar release cannot activate a row/input action");
+          "Find old track stripe belongs to the full-width result hit target");
 
     memset(&input, 0, sizeof(input));
     state.find_scroll_y = 0;
@@ -3996,14 +4274,11 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
           lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++),
           "wheel-hidden Find row focus builds");
-    scroll = find_scroll_record_on_side(
-      &storage, layout.bounds.x + layout.bounds.w / 2, 0);
-    if (scroll)
-      input.ui = ui0_input_pointer_wheel(
-        scroll->viewport_rect.x + scroll->viewport_rect.w / 2,
-        scroll->viewport_rect.y + scroll->viewport_rect.h / 2,
-        0, 0, 0, 0, 1000);
-    check(scroll && lifecycle_build(
+    input.ui = ui0_input_pointer_wheel(
+      layout.left_panel_rect.x + 160,
+      layout.left_panel_rect.y + 180,
+      0, 0, 0, 0, 1000);
+    check(lifecycle_build(
             &state, &layout_input, &layout, &projection, &input,
             theme, advances, &storage, &frame, frame_index++) &&
           state.focus_id == 0 && !state.focus_visible,
@@ -4022,69 +4297,56 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
     projection.find.row_count = 16;
     projection.find.total_count = 16;
 
+    state.find_scroll.active_thumb_id = 101;
+    state.find_scroll.drag_start_pointer_y = 130;
+    state.find_scroll.drag_start_scroll_y = 40;
+    retained_scroll = state.find_scroll_y;
     memset(&input, 0, sizeof(input));
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
-                          theme, advances, &storage, &frame, frame_index++),
-          "Find thumb-owner reset seed builds");
-    scroll = find_scroll_record_on_side(
-      &storage, layout.bounds.x + layout.bounds.w / 2, 0);
-    thumb = scroll ? scroll->thumb_rect : ui0_rect(0, 0, 0, 0);
-    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
-                                 thumb.y + thumb.h / 2,
-                                 1, 1, 0);
-    check(scroll && lifecycle_build(
-            &state, &layout_input, &layout, &projection, &input,
-            theme, advances, &storage, &frame, frame_index++) &&
-          state.find_scroll.active_thumb_id != 0,
-          "Find thumb press owns its bounded drag state");
-    retained_scroll = state.find_scroll_y;
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.find_scroll.active_thumb_id == 0 &&
+          state.find_scroll.drag_start_pointer_y == 0 &&
+          state.find_scroll.drag_start_scroll_y == 0 &&
+          state.find_scroll_y == retained_scroll &&
+          (frame.change_flags & ReaderViewFrameChange_StateChanged) != 0,
+          "ready Find retires obsolete thumb state without losing offset");
+    state.find_scroll.active_thumb_id = 102;
+    state.find_scroll.drag_start_pointer_y = 131;
+    state.find_scroll.drag_start_scroll_y = 41;
     projection.find.status.state = ReaderViewLoad_Loading;
-    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
-                                 thumb.y + thumb.h / 2 + 40,
-                                 1, 0, 0);
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++) &&
           state.find_scroll.active_thumb_id == 0 &&
           state.find_scroll.drag_start_pointer_y == 0 &&
           state.find_scroll.drag_start_scroll_y == 0 &&
           state.find_scroll_y == retained_scroll,
-          "Loading Find retires thumb drag ownership but keeps scroll");
+          "Loading Find retires obsolete interaction state but keeps scroll");
     projection.find.status = ready_status();
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++) &&
           state.find_scroll.active_thumb_id == 0 &&
-          state.find_scroll_y == retained_scroll,
-          "ready Find cannot resume a drag without a new press");
+          state.find_scroll_y == retained_scroll &&
+          scroll_records_empty(&storage),
+          "ready Find cannot revive retired thumb or track ownership");
 
     memset(&input, 0, sizeof(input));
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++),
-          "Find immediate-close thumb seed builds");
-    scroll = find_scroll_record_on_side(
-      &storage, layout.bounds.x + layout.bounds.w / 2, 0);
-    thumb = scroll ? scroll->thumb_rect : ui0_rect(0, 0, 0, 0);
-    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
-                                 thumb.y + thumb.h / 2,
-                                 1, 1, 0);
-    check(scroll && lifecycle_build(
-            &state, &layout_input, &layout, &projection, &input,
-            theme, advances, &storage, &frame, frame_index++) &&
-          state.find_scroll.active_thumb_id != 0,
-          "Find immediate-close thumb press owns drag state");
+          "Find immediate-close obsolete-owner seed builds");
+    state.find_scroll.active_thumb_id = 103;
+    state.find_scroll.drag_start_pointer_y = 132;
+    state.find_scroll.drag_start_scroll_y = 42;
     node = find_semantic_control_source(
       &frame, ReaderViewSemanticControl_LeftPanelClose, 0);
     check(node && reader_view_accessibility_invoke(&state, node->id),
-          "Find close queues while its thumb is active");
-    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
-                                 thumb.y + thumb.h / 2 + 40,
-                                 1, 0, 0);
+          "Find close queues after obsolete scroll ownership is retired");
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++) &&
           state.left_panel == ReaderViewLeftPanel_None &&
           state.find_scroll.active_thumb_id == 0 &&
           state.find_scroll.drag_start_pointer_y == 0 &&
           state.find_scroll.drag_start_scroll_y == 0,
-          "same-build Find close retires active thumb ownership");
+          "same-build Find close keeps obsolete thumb ownership retired");
   }
 
   {
@@ -4094,7 +4356,6 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
       ReaderViewSemanticControl_RightRowStar,
       ReaderViewSemanticControl_RightRowMenu,
     };
-    const UI0ScrollRecord *scroll;
     const UI0ControlRecord *row_control;
     const UI0ControlRecord *secondary_control;
     const UI0ControlRecord *primary_control;
@@ -4104,8 +4365,6 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
     const UI0DrawCommand *primary_draw;
     const UI0DrawCommand *star_draw;
     const UI0DrawCommand *menu_draw;
-    UI0Rect content_clip;
-    UI0Rect thumb;
     UI0S32 index;
     UI0S32 retained_scroll;
     for (index = 0; index < 20; ++index)
@@ -4144,25 +4403,21 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++),
           "long Annotations scroll seed frame builds");
-    scroll = find_scroll_record_on_side(
-      &storage, layout.bounds.x + layout.bounds.w / 2, 1);
-    if (scroll)
-      input.ui = ui0_input_pointer_wheel(
-        scroll->viewport_rect.x + scroll->viewport_rect.w / 2,
-        scroll->viewport_rect.y + scroll->viewport_rect.h / 2,
-        0, 0, 0, 0, 40);
-    check(scroll && lifecycle_build(
+    check(scroll_records_empty(&storage) &&
+          count_draw_op(&frame, UI0DrawOp_ScrollTrack) == 0 &&
+          count_draw_op(&frame, UI0DrawOp_ScrollThumb) == 0,
+          "Annotations publishes no visible or interactive scrollbar records");
+    input.ui = ui0_input_pointer_wheel(
+      layout.right_panel_rect.x + 100,
+      layout.right_panel_rect.y + 180,
+      0, 0, 0, 0, 40);
+    check(lifecycle_build(
             &state, &layout_input, &layout, &projection, &input,
             theme, advances, &storage, &frame, frame_index++) &&
           state.right_scroll_y == 40 &&
           (frame.change_flags & ReaderViewFrameChange_StateChanged) != 0,
           "Annotations wheel delta applies exactly once and reports state "
           "change");
-    scroll = find_scroll_record_on_side(
-      &storage, layout.bounds.x + layout.bounds.w / 2, 1);
-    content_clip = scroll ? scroll->viewport_rect : ui0_rect(0, 0, 0, 0);
-    if (scroll)
-      content_clip.w = scroll->track_rect.x - content_clip.x;
     node = find_semantic_control_source(
       &frame, ReaderViewSemanticControl_RightRow, 3000);
     row_control = node ? find_control_for_source(&storage, node->id) : 0;
@@ -4186,47 +4441,56 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
     menu_control = node ? find_control_for_source(&storage, node->id) : 0;
     menu_draw = node ? find_draw_for_source(
       &frame, UI0DrawOp_Text, node->id) : 0;
-    check(scroll && row_control && secondary_control && primary_control &&
+    check(row_control && secondary_control && primary_control &&
           star_control && menu_control && secondary_draw && primary_draw &&
           star_draw && menu_draw &&
           row_control->clip_rect.h > 0 &&
           row_control->clip_rect.h < row_control->rect.h &&
           secondary_control->clip_rect.h > 0 &&
           secondary_control->clip_rect.h < secondary_control->rect.h &&
-          rect_within(row_control->clip_rect, content_clip) &&
-          rect_within(secondary_control->clip_rect, content_clip) &&
-          rect_within(primary_control->clip_rect, content_clip) &&
-          rect_within(star_control->clip_rect, content_clip) &&
-          rect_within(menu_control->clip_rect, content_clip) &&
-          rect_within(secondary_draw->clip_rect, content_clip) &&
-          rect_within(primary_draw->clip_rect, content_clip) &&
-          rect_within(star_draw->clip_rect, content_clip) &&
-          rect_within(menu_draw->clip_rect, content_clip),
-          "partial Annotations row/children/star/menu clips exclude its track");
-    if (scroll)
+          row_control->clip_rect.x == layout.right_panel_rect.x + 10 &&
+          row_control->clip_rect.w == layout.right_panel_rect.w - 20 &&
+          secondary_control->clip_rect.x == secondary_control->rect.x &&
+          secondary_control->clip_rect.w == secondary_control->rect.w &&
+          primary_control->clip_rect.x == primary_control->rect.x &&
+          primary_control->clip_rect.w == primary_control->rect.w &&
+          star_control->clip_rect.x == star_control->rect.x &&
+          star_control->clip_rect.w == star_control->rect.w &&
+          menu_control->clip_rect.x == menu_control->rect.x &&
+          menu_control->clip_rect.w == menu_control->rect.w &&
+          rect_equal(secondary_draw->clip_rect,
+                     secondary_control->clip_rect) &&
+          rect_equal(primary_draw->clip_rect, primary_control->clip_rect) &&
+          rect_equal(star_draw->clip_rect, star_control->clip_rect) &&
+          rect_equal(menu_draw->clip_rect, menu_control->clip_rect),
+          "partial Annotations row/children/star/menu clips retain the full "
+          "frozen width");
+    if (row_control && star_control)
       input.ui = ui0_input_pointer(
-        scroll->track_rect.x + scroll->track_rect.w / 2,
-        scroll->track_rect.y + scroll->track_rect.h / 2,
+        star_control->rect.x - 2,
+        row_control->clip_rect.y + row_control->clip_rect.h / 2,
         1, 1, 0);
-    check(scroll && lifecycle_build(
+    check(row_control && star_control && lifecycle_build(
             &state, &layout_input, &layout, &projection, &input,
             theme, advances, &storage, &frame, frame_index++) &&
           find_action(&frame, ReaderViewAction_ActivateRightRow) == 0 &&
           find_action(&frame, ReaderViewAction_ToggleRightRowStar) == 0 &&
           state.popup == ReaderViewPopup_None,
-          "Annotations scrollbar press cannot leak into row/star/menu state");
-    if (scroll)
+          "Annotations full-width main-row press has no hidden track owner");
+    if (row_control && star_control)
       input.ui = ui0_input_pointer(
-        scroll->track_rect.x + scroll->track_rect.w / 2,
-        scroll->track_rect.y + scroll->track_rect.h / 2,
+        star_control->rect.x - 2,
+        row_control->clip_rect.y + row_control->clip_rect.h / 2,
         0, 0, 1);
-    check(scroll && lifecycle_build(
+    check(row_control && star_control && lifecycle_build(
             &state, &layout_input, &layout, &projection, &input,
             theme, advances, &storage, &frame, frame_index++) &&
-          find_action(&frame, ReaderViewAction_ActivateRightRow) == 0 &&
+          find_action(&frame, ReaderViewAction_ActivateRightRow) != 0 &&
+          find_action(&frame, ReaderViewAction_ActivateRightRow)->key == 3000 &&
           find_action(&frame, ReaderViewAction_ToggleRightRowStar) == 0 &&
           state.popup == ReaderViewPopup_None,
-          "Annotations scrollbar release cannot activate row/star/menu state");
+          "Annotations full-width main-row release activates without a track "
+          "signal intercepting it");
 
     for (index = 0;
          index < (UI0S32)(sizeof(focused_controls) /
@@ -4244,14 +4508,11 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
             lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                             theme, advances, &storage, &frame, frame_index++),
             "wheel-hidden Annotations row control focus builds");
-      scroll = find_scroll_record_on_side(
-        &storage, layout.bounds.x + layout.bounds.w / 2, 1);
-      if (scroll)
-        input.ui = ui0_input_pointer_wheel(
-          scroll->viewport_rect.x + scroll->viewport_rect.w / 2,
-          scroll->viewport_rect.y + scroll->viewport_rect.h / 2,
-          0, 0, 0, 0, 1000);
-      check(scroll && lifecycle_build(
+      input.ui = ui0_input_pointer_wheel(
+        layout.right_panel_rect.x + 100,
+        layout.right_panel_rect.y + 180,
+        0, 0, 0, 0, 1000);
+      check(lifecycle_build(
               &state, &layout_input, &layout, &projection, &input,
               theme, advances, &storage, &frame, frame_index++) &&
             state.focus_id == 0 && !state.focus_visible,
@@ -4281,69 +4542,58 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
       projection.right.highlight_count = 20;
     }
 
+    state.right_scroll.active_thumb_id = 111;
+    state.right_scroll.drag_start_pointer_y = 140;
+    state.right_scroll.drag_start_scroll_y = 50;
+    retained_scroll = state.right_scroll_y;
     memset(&input, 0, sizeof(input));
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
-                          theme, advances, &storage, &frame, frame_index++),
-          "Annotations thumb-owner reset seed builds");
-    scroll = find_scroll_record_on_side(
-      &storage, layout.bounds.x + layout.bounds.w / 2, 1);
-    thumb = scroll ? scroll->thumb_rect : ui0_rect(0, 0, 0, 0);
-    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
-                                 thumb.y + thumb.h / 2,
-                                 1, 1, 0);
-    check(scroll && lifecycle_build(
-            &state, &layout_input, &layout, &projection, &input,
-            theme, advances, &storage, &frame, frame_index++) &&
-          state.right_scroll.active_thumb_id != 0,
-          "Annotations thumb press owns its bounded drag state");
-    retained_scroll = state.right_scroll_y;
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.right_scroll.active_thumb_id == 0 &&
+          state.right_scroll.drag_start_pointer_y == 0 &&
+          state.right_scroll.drag_start_scroll_y == 0 &&
+          state.right_scroll_y == retained_scroll &&
+          (frame.change_flags & ReaderViewFrameChange_StateChanged) != 0,
+          "ready Annotations retires obsolete thumb state without losing "
+          "offset");
+    state.right_scroll.active_thumb_id = 112;
+    state.right_scroll.drag_start_pointer_y = 141;
+    state.right_scroll.drag_start_scroll_y = 51;
     projection.right.status.state = ReaderViewLoad_Loading;
-    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
-                                 thumb.y + thumb.h / 2 + 40,
-                                 1, 0, 0);
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++) &&
           state.right_scroll.active_thumb_id == 0 &&
           state.right_scroll.drag_start_pointer_y == 0 &&
           state.right_scroll.drag_start_scroll_y == 0 &&
           state.right_scroll_y == retained_scroll,
-          "Loading Annotations retires thumb drag ownership but keeps scroll");
+          "Loading Annotations retires obsolete interaction state but keeps "
+          "scroll");
     projection.right.status = ready_status();
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++) &&
           state.right_scroll.active_thumb_id == 0 &&
-          state.right_scroll_y == retained_scroll,
-          "ready Annotations cannot resume a drag without a new press");
+          state.right_scroll_y == retained_scroll &&
+          scroll_records_empty(&storage),
+          "ready Annotations cannot revive retired thumb or track ownership");
 
     memset(&input, 0, sizeof(input));
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++),
-          "Annotations immediate-close thumb seed builds");
-    scroll = find_scroll_record_on_side(
-      &storage, layout.bounds.x + layout.bounds.w / 2, 1);
-    thumb = scroll ? scroll->thumb_rect : ui0_rect(0, 0, 0, 0);
-    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
-                                 thumb.y + thumb.h / 2,
-                                 1, 1, 0);
-    check(scroll && lifecycle_build(
-            &state, &layout_input, &layout, &projection, &input,
-            theme, advances, &storage, &frame, frame_index++) &&
-          state.right_scroll.active_thumb_id != 0,
-          "Annotations immediate-close thumb press owns drag state");
+          "Annotations immediate-close hidden-scroll seed builds");
+    state.right_scroll.active_thumb_id = 113;
+    state.right_scroll.drag_start_pointer_y = 142;
+    state.right_scroll.drag_start_scroll_y = 52;
     node = find_semantic_control_source(
       &frame, ReaderViewSemanticControl_RightPanelClose, 0);
     check(node && reader_view_accessibility_invoke(&state, node->id),
-          "Annotations close queues while its thumb is active");
-    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
-                                 thumb.y + thumb.h / 2 + 40,
-                                 1, 0, 0);
+          "Annotations close queues with obsolete scroll state present");
     check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                           theme, advances, &storage, &frame, frame_index++) &&
           !state.right_panel_open &&
           state.right_scroll.active_thumb_id == 0 &&
           state.right_scroll.drag_start_pointer_y == 0 &&
           state.right_scroll.drag_start_scroll_y == 0,
-          "same-build Annotations close retires active thumb ownership");
+          "same-build Annotations close retires obsolete thumb ownership");
   }
 }
 
@@ -4400,6 +4650,7 @@ main(void)
   test_progress_u64_scaling(&theme);
   test_reference_panels_and_disabled_gutter(&theme);
   test_focus_root_and_refresh_lifecycle(&theme);
+  test_open_panel_focus_boundaries(&theme);
   test_modal_feature_and_scroll_lifecycle(&theme);
 
   geometry_style = reader_view_default_content_geometry_style();

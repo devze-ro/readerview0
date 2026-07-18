@@ -13,6 +13,12 @@ direction remains frozen re10 first, extracted re10 second, and lectern0 third.
 Two extracted hosts matching each other is not an acceptance result when they
 both differ from the frozen reference.
 
+Directional frozen-a6b decoded-pixel and source evidence supersedes the
+earlier provisional language in this record that described a visible panel
+scrollbar, an eight-pixel track reservation, or thumb dragging. The accepted
+panel lists are full-width, wheel-scrollable, and visually hidden; the corrected
+contract below is authoritative.
+
 This is a forward extraction recovery, not a revert. Readerview0 owns the
 portable UI0-composed panel chrome, transient focus/popup/scroll state, borrowed
 one-frame projections, deterministic records, and bounded returned actions.
@@ -58,6 +64,11 @@ allocation. Returned text bindings and semantics retain the ordinary
 until-next-build frame-storage lifetime. `color_key` remains identity and
 attachment evidence only; no modulo palette or theme-dependent color guessing
 is permitted.
+
+Open Contents, Find, and Annotations toolbar controls retain Selected as their
+only visual open-state flag. Their semantic records carry Selected and Expanded
+but never Checked, preserving native disclosure meaning without inventing a
+checked/open button treatment.
 
 ## Shared panel geometry
 
@@ -107,8 +118,11 @@ The 320 px right panel is `(1068,56,320,686)`. Its accepted records are:
 - the ready filter-specific empty status at `(1078,144,300,24)`.
 
 The title begins at x 1156. The row's text begins at x 1091, and the star
-paints as a 14 by 14 icon at `(1323,154)` without a button shell. Selected-only
-rows do not acquire a full-width painted band.
+paints as a 14 by 14 icon at `(1323,154)` without a button shell. The row menu
+retains its standard 30 by 28 fill/border shell and centered literal ellipsis.
+Annotation rows use the elevated-surface fill only while hovered or active;
+idle, selected-only, and focus-only rows have neither fill nor border. Semantic
+selection/focus and the focus ring remain intact.
 
 Available filter choices use the frozen visual order All, Highlights, Notes,
 and Bookmarks. With all four choices present, their 274 by 29 px rows begin at
@@ -205,12 +219,22 @@ record identities.
 Each section reserves the frozen 26 px vertical block while its text occupies
 the leading 20 px rectangle and uses the same scale-2 chrome-title typography
 as the accepted reference. Each row's 30 by 28 menu target paints the centered
-literal `...` inside a clipped 22 by 28 text rectangle. It has no substituted
-icon, control fill, or control border; its accessible name is the distinct
-localized `Annotation actions` label.
+literal `...` inside a clipped 22 by 28 text rectangle and retains the standard
+UI0 menu-trigger fill and border shell. It has no substituted icon; its
+accessible name is the distinct localized `Annotation actions` label. The star
+target remains shell-free. Row fill is emitted only for Hovered or Active and
+uses `UI0ColorRole_SurfaceElevated` for both states; selection-only and
+focus-only never synthesize a row band or border.
 Partially visible row, text, star, and menu records are clipped to the content
-viewport excluding the scrollbar track. A fully clipped star or menu trigger
-is not published as a control or semantic focus target.
+viewport's full width. A fully clipped star or menu trigger is not published as
+a control or semantic focus target.
+
+The shared frame contains exactly one bound text draw for the Annotations title,
+one for each published section heading, and one for visible typed Find input.
+These exact records and rectangles prove that absent or mismatched glyph pixels
+belong to the host's concrete text-record renderer seam; readerview0 does not
+own native glyph rasterization and must not perturb the frozen +10/+32 metadata
+and primary-text positions to compensate.
 
 The action popup is anchored four pixels below the row-menu target, flips
 above a near-bottom target, and uses the frozen UI0 flat-menu metrics. At the
@@ -314,12 +338,15 @@ evidence atomically.
 
 TOC, Find, and Annotations apply one wheel delta per build, reveal a row when
 focus moves to it, and retire focus when direct scrolling removes that row from
-publication. Child paint and pointer targets are clipped to the content
-viewport, and each scrollbar track is excluded from underlying row activation.
-Each panel's active thumb and drag origins are reset when its Ready scroll owner
-is closed, feature-withdrawn, or becomes loading/unavailable/error; the bounded
-scroll offset is preserved, and returning to Ready cannot resume the old drag
-without a new press.
+publication. Child paint and pointer targets use and clip to the full content
+viewport. No panel reserves an eight-pixel track, emits a scrollbar track/thumb
+record or draw, or publishes an invisible track signal that can intercept a
+row. The obsolete public active-thumb and drag-origin fields are reset when a
+Ready scroll owner is closed, feature-withdrawn, or becomes
+loading/unavailable/error; the bounded offset is preserved. Forward Tab retains
+the frozen Previous, Next, Progress, adjacent-panel order for Contents, Find,
+and Annotations, and reverse Tab leaves the panel through Progress with visible
+focus.
 
 ## Page-gutter regression
 
@@ -369,18 +396,20 @@ Strict MSVC C11 `/W4 /WX` validation covers:
   activation, and absence of query-change actions;
 - annotation row activation, four exact counted filter labels, selected rail,
   20 px scale-2 section labels within 26 px blocks, centered literal row-menu
-  ellipses without icon or shell, all three exact kind-specific action matrices,
-  anchored and bottom-flipped popup geometry, pointer/keyboard focus entry,
-  native names, four exact filter-specific empty states, filter selection and
-  Escape restoration, dynamic-membership closure, scroll reset, and bounded
-  popup containment;
+  ellipses without a substituted icon and with the standard 30 by 28 shell,
+  shell-free stars, exact elevated-surface hover/active row fill with no
+  idle/selected-only/focus-only fill or row border, all three exact
+  kind-specific action matrices, anchored and bottom-flipped popup geometry,
+  pointer/keyboard focus entry, native names, four exact filter-specific empty
+  states, filter selection and Escape restoration, dynamic-membership closure,
+  scroll reset, and bounded popup containment;
 - close-before-action and trigger-focus restoration for every applicable
   Go To/Add-Remove Star/Edit Note/kind-specific Delete path, including direct
   row selection versus popup Go To;
 - popup-owner removal and action-membership changes without an empty root,
   dangling focus, or incorrect normal-row-over-popup draw ordering;
 - normal Delete followed by row removal without a vanished trigger/selection,
-  and long-TOC Sidenav paint below its scroll track/thumb;
+  and long-TOC full-width Sidenav paint with no scrollbar record or draw;
 - dirty-note Escape preservation, explicit Cancel identity/action closure, and
   normalized opaque note-revision evidence, plus successful host Save/Delete
   acknowledgement through modal-state retirement and focus restoration;
@@ -389,8 +418,9 @@ Strict MSVC C11 `/W4 /WX` validation covers:
   Escape cancellation, popup/modal root containment, all-projected-row and
   feature-owner reconciliation, wheel-hidden then removed TOC/Find/right-row,
   star, and menu identities, single-step wheel input, focused-row reveal,
-  partial-child clipping, fully clipped star/menu withdrawal, scrollbar-track
-  press/release exclusion, and interrupted/closed thumb-owner retirement;
+  partial-child clipping, fully clipped star/menu withdrawal, absence of any
+  scrollbar draw/record/invisible hit interception, obsolete thumb-owner
+  neutralization, and open-panel Previous/Next/Progress Tab boundaries;
 - verbatim standalone Notes-only rail colors under light and dark themes;
 - valid and invalid highlight/note attachment identity, rail-color, and
   invalid-text projections; and
