@@ -156,7 +156,15 @@ the trigger with visible focus and one Focus-colored border over the full
 `(1078,66,24,24)` perimeter. Active, open,
 focused, and focus-visible states all retain that border; the separate UI0
 FocusRing command is suppressed only for this trigger so it is not composited
-twice.
+twice. In the combined focused/focus-visible Escape frame, four ordered 1 by 1
+ControlFill records follow the border at `(1078,66)`, `(1101,66)`,
+`(1078,89)`, and `(1101,89)`. They use the trigger's SelectTrigger source,
+box index, and clip. Their color is the widened per-channel Surface-to-Focus
+source-over result at the frozen 96/255 coverage: shared Light Surface
+`#FFFDF9` and Focus `#F26A1B` resolve exactly to `#FAC6A5`; shared Dark Surface
+`#181716` and Focus `#FF7A2F` resolve to `#6F3C1F`. This is token-derived
+theme adaptation rather than a light-only raster literal. Open/active-only,
+focused-only, disabled, and root-blocked triggers publish no corner seam.
 
 ## TOC behavior
 
@@ -467,6 +475,9 @@ Strict MSVC C11 `/W4 /WX` validation covers:
   kind-specific action matrices, anchored and bottom-flipped popup geometry,
   pointer/keyboard focus entry, native names, four exact filter-specific empty
   states, exact active/open/focused Focus border, suppressed filter FocusRing,
+  four ordered post-border focused/focus-visible corner records, exact shared
+  Light `#FAC6A5` and Dark `#6F3C1F` 96/255 Surface-to-Focus channel results,
+  no seam for unfocused/closed, open/active-only, or focused-only triggers,
   preserved Bookmarks selection, dynamic-membership closure,
   scroll reset, and bounded popup containment;
 - close-before-action and trigger-focus restoration for every applicable

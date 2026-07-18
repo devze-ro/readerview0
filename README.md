@@ -71,7 +71,13 @@ activation continue through the full semantic row. An unstarred icon preblends
 against `SurfaceElevated`; a starred icon preblends against `Badge`. An
 active, open, focused, or focus-visible filter trigger paints its border with
 the resolved Focus color. The filter alone suppresses UI0's additional Focus
-ring so visible focus is represented once by the frozen rounded border. Its
+ring so visible focus is represented once by the frozen rounded border. When
+the trigger is both focused and focus-visible, four ordered 1 by 1 records
+restore only the rounded border's extreme corners after that border draw. Their
+color is the caller's Focus token composited over Surface at the frozen 96/255
+coverage (`#FAC6A5` for the shared Light profile); open/active-only,
+focused-only, disabled, and blocked triggers receive no seam, and other theme
+profiles use the same token-derived blend. Its
 row-action popup is anchored to the exact row menu, flips
 at the panel edge, and exposes the frozen Bookmark, Note, or Highlight action
 matrix. Every kind retains its inline star; only Highlight carries Star in the

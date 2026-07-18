@@ -226,7 +226,13 @@ unstarred and `Badge` while
 starred. An enabled filter trigger uses the Focus border color while open,
 active, focused, or focus-visible. Readerview0 suppresses the separate UI0
 FocusRing command only for this trigger, so the frozen rounded border carries
-focus once without double compositing. The Annotations title and
+focus once without double compositing. For the combined focused/focus-visible
+state only, four post-border 1 by 1 corner records reproduce the frozen
+rounded-edge coverage. The color is a widened, rounded 96/255 source-over blend
+from resolved Surface to resolved Focus, yielding `#FAC6A5` for the shared
+Light profile and adapting from the same tokens in every other profile.
+Open/active-only, focused-only, disabled, and root-blocked triggers do not
+publish those records. The Annotations title and
 20 px section heading, like the visible Find-input text, each have one exact
 shared text draw and binding. Hosts own translation of those records through
 their concrete system-UI renderer, so glyph-raster differences are host adapter

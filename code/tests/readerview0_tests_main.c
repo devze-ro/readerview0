@@ -258,6 +258,32 @@ find_draw_index_for_source(const ReaderViewFrame *frame,
   return -1;
 }
 
+static UI0S32
+collect_one_pixel_draws_for_source(const ReaderViewFrame *frame,
+                                   UI0DrawOpKind op,
+                                   UI0ID source_id,
+                                   const UI0DrawCommand **commands,
+                                   UI0S32 *indices,
+                                   UI0S32 capacity)
+{
+  UI0S32 index;
+  UI0S32 count = 0;
+  for (index = 0; index < frame->draw_command_count; ++index)
+  {
+    const UI0DrawCommand *command = frame->draw_commands + index;
+    if (command->op != op || command->source_id != source_id ||
+        command->rect.w != 1 || command->rect.h != 1)
+      continue;
+    if (count < capacity)
+    {
+      if (commands) commands[count] = command;
+      if (indices) indices[count] = index;
+    }
+    count += 1;
+  }
+  return count;
+}
+
 static const UI0DrawCommand *
 find_draw_for_rect(const ReaderViewFrame *frame,
                    UI0DrawOpKind op,
@@ -1851,6 +1877,12 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
         rect_equal(icon->rect, ui0_rect(1083, 71, 14, 14)),
         "Annotations filter restores its frozen outlined 14px Select icon "
         "shell");
+  check(filter != 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                 filter->id) == 1 &&
+        collect_one_pixel_draws_for_source(
+          &frame, UI0DrawOp_ControlFill, filter->id, 0, 0, 0) == 0,
+        "unfocused closed filter trigger has no focus corner seam");
   node = find_semantic_control_source(
     &frame, ReaderViewSemanticControl_RightExport, 0);
   check(node != 0 && rect_equal(node->rect, ui0_rect(1112, 66, 24, 24)) &&
@@ -2295,32 +2327,113 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
         state.focus_id == option->id,
         "popup consumes blocked AT focus/invoke and keeps focus contained");
 
-  frame_input.escape_pressed = 1;
-  build_input.frame_index += 1;
-  check(reader_view_build(&build_input, &storage, &frame),
-        "Filter popup Escape builds");
-  filter = find_semantic_control_source(
-    &frame, ReaderViewSemanticControl_RightFilter,
-    ReaderViewRightFilter_All);
-  command = filter ? find_draw_for_source(&frame, UI0DrawOp_FocusRing,
-                                           filter->id) : 0;
-  border = filter ? find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
-                                          filter->id) : 0;
-  check(state.popup == ReaderViewPopup_None &&
-        state.restore_focus_id == 0 && filter &&
-        state.focus_id == filter->id && state.focus_visible &&
-        (filter->flags & ReaderViewSemantic_Focused) != 0 && command == 0 &&
-        border && border->color == theme->colors[UI0ColorRole_Focus] &&
-        (border->flags &
-         (UI0DrawFlag_Focused | UI0DrawFlag_FocusVisible)) ==
-          (UI0DrawFlag_Focused | UI0DrawFlag_FocusVisible) &&
-        (border->flags & (UI0DrawFlag_Open | UI0DrawFlag_Active)) == 0 &&
-        rect_equal(border->rect, ui0_rect(1078, 66, 24, 24)) &&
-        rect_equal(border->clip_rect, ui0_rect(1078, 66, 24, 24)) &&
-        count_draw_op_for_source(&frame, UI0DrawOp_FocusRing,
-                                 filter->id) == 0,
-        "Filter Escape restores the frozen focused trigger border and "
-        "suppresses its separate double-composited Focus ring");
+  {
+    UI0ThemeProfile light_profile =
+      ui0_theme_profile_for_kind(UI0ThemeProfile_Light);
+    UI0ThemeProfile dark_profile =
+      ui0_theme_profile_for_kind(UI0ThemeProfile_Dark);
+    const UI0DrawCommand *seams[4] = { 0, 0, 0, 0 };
+    UI0S32 seam_indices[4] = { -1, -1, -1, -1 };
+    UI0S32 border_index;
+    UI0S32 seam_count;
+    UI0S32 seam_index;
+    static const UI0Rect expected_corners[4] = {
+      { 1078, 66, 1, 1 }, { 1101, 66, 1, 1 },
+      { 1078, 89, 1, 1 }, { 1101, 89, 1, 1 },
+    };
+
+    build_input.theme = &light_profile.resolved;
+    frame_input.escape_pressed = 1;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Filter popup Escape builds");
+    filter = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightFilter,
+      ReaderViewRightFilter_All);
+    command = filter ? find_draw_for_source(&frame, UI0DrawOp_FocusRing,
+                                             filter->id) : 0;
+    border = filter ? find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
+                                            filter->id) : 0;
+    control = filter ? find_control_for_source(&storage, filter->id) : 0;
+    border_index = filter ? find_draw_index_for_source(
+      &frame, UI0DrawOp_ControlBorder, filter->id) : -1;
+    seam_count = filter ? collect_one_pixel_draws_for_source(
+      &frame, UI0DrawOp_ControlFill, filter->id,
+      seams, seam_indices, 4) : 0;
+    check(state.popup == ReaderViewPopup_None &&
+          state.restore_focus_id == 0 && filter &&
+          state.focus_id == filter->id && state.focus_visible &&
+          (filter->flags & ReaderViewSemantic_Focused) != 0 && command == 0 &&
+          border &&
+          border->color ==
+            light_profile.resolved.colors[UI0ColorRole_Focus] &&
+          (border->flags &
+           (UI0DrawFlag_Focused | UI0DrawFlag_FocusVisible)) ==
+            (UI0DrawFlag_Focused | UI0DrawFlag_FocusVisible) &&
+          (border->flags & (UI0DrawFlag_Open | UI0DrawFlag_Active)) == 0 &&
+          rect_equal(border->rect, ui0_rect(1078, 66, 24, 24)) &&
+          rect_equal(border->clip_rect, ui0_rect(1078, 66, 24, 24)) &&
+          count_draw_op_for_source(&frame, UI0DrawOp_FocusRing,
+                                   filter->id) == 0,
+          "Filter Escape restores the frozen focused trigger border and "
+          "suppresses its separate double-composited Focus ring");
+    check(light_profile.resolved.colors[UI0ColorRole_Surface] ==
+            0xFFFFFDF9u &&
+          light_profile.resolved.colors[UI0ColorRole_Focus] ==
+            0xFFF26A1Bu &&
+          seam_count == 4 &&
+          count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                   filter ? filter->id : 0) == 5,
+          "focused filter adds exactly four frozen light-profile corner "
+          "seams over its ordinary fill");
+    for (seam_index = 0; seam_index < 4; ++seam_index)
+    {
+      check(seams[seam_index] != 0 && control != 0 &&
+            rect_equal(seams[seam_index]->rect,
+                       expected_corners[seam_index]) &&
+            rect_equal(seams[seam_index]->clip_rect,
+                       ui0_rect(1078, 66, 24, 24)) &&
+            seams[seam_index]->source_id == filter->id &&
+            seams[seam_index]->source_kind == UI0ControlKind_SelectTrigger &&
+            seams[seam_index]->source_index == control->box_index &&
+            seams[seam_index]->color == 0xFFFAC6A5u &&
+            seams[seam_index]->stroke_color == 0xFFFAC6A5u &&
+            seams[seam_index]->flags == UI0DrawFlag_RadiusExplicit &&
+            seams[seam_index]->corner_radius == 0 &&
+            seam_indices[seam_index] > border_index &&
+            (seam_index == 0 ||
+             seam_indices[seam_index] > seam_indices[seam_index - 1]),
+            "focused filter corner seam preserves exact source, clip, "
+            "light color, and TL/TR/BL/BR post-border order");
+    }
+
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.theme = &dark_profile.resolved;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "focused filter dark-profile adaptation builds");
+    filter = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightFilter,
+      ReaderViewRightFilter_All);
+    for (seam_index = 0; seam_index < 4; ++seam_index)
+      seams[seam_index] = 0;
+    seam_count = filter ? collect_one_pixel_draws_for_source(
+      &frame, UI0DrawOp_ControlFill, filter->id, seams, 0, 4) : 0;
+    check(dark_profile.resolved.colors[UI0ColorRole_Surface] ==
+            0xFF181716u &&
+          dark_profile.resolved.colors[UI0ColorRole_Focus] ==
+            0xFFFF7A2Fu &&
+          seam_count == 4 && seams[0] && seams[1] && seams[2] && seams[3] &&
+          seams[0]->color == 0xFF6F3C1Fu &&
+          seams[1]->color == 0xFF6F3C1Fu &&
+          seams[2]->color == 0xFF6F3C1Fu &&
+          seams[3]->color == 0xFF6F3C1Fu &&
+          frame.action_count == 0 && state.popup == ReaderViewPopup_None &&
+          filter && state.focus_id == filter->id && state.focus_visible,
+          "filter corner coverage adapts every channel to the dark Surface "
+          "and Focus tokens without changing interaction");
+    build_input.theme = theme;
+  }
 
   state.left_panel = ReaderViewLeftPanel_Contents;
   state.right_panel_open = 1;
@@ -2364,9 +2477,13 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
     check(filter != 0 && border != 0 &&
           (border->flags & UI0DrawFlag_Active) != 0 &&
           (border->flags & UI0DrawFlag_Open) == 0 &&
-          border->color == theme->colors[UI0ColorRole_Focus],
+          border->color == theme->colors[UI0ColorRole_Focus] &&
+          count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                   filter->id) == 1 &&
+          collect_one_pixel_draws_for_source(
+            &frame, UI0DrawOp_ControlFill, filter->id, 0, 0, 0) == 0,
           "active filter trigger retains its exact Focus border without an "
-          "open-state substitution");
+          "open-state substitution or focus corner seam");
     frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
                                        rect.y + rect.h / 2,
                                        0, 0, 1);
@@ -2385,9 +2502,13 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
     &frame, UI0DrawOp_ControlBorder, filter->id) : 0;
   check(filter != 0 && border != 0 &&
         (border->flags & UI0DrawFlag_Open) != 0 &&
-        border->color == theme->colors[UI0ColorRole_Focus],
+        border->color == theme->colors[UI0ColorRole_Focus] &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                 filter->id) == 1 &&
+        collect_one_pixel_draws_for_source(
+          &frame, UI0DrawOp_ControlFill, filter->id, 0, 0, 0) == 0,
         "open filter trigger retains its exact Focus border while the popup "
-        "owns interaction");
+        "owns interaction without a focus corner seam");
   option = find_semantic_control_source(
     &frame, ReaderViewSemanticControl_RightFilterOption,
     ReaderViewRightFilter_Bookmarks);
@@ -2419,9 +2540,14 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
         state.right_scroll_y == 0 && state.popup == ReaderViewPopup_None &&
         filter && state.focus_id == filter->id && border &&
         (border->flags & UI0DrawFlag_Open) != 0 &&
-        border->color == theme->colors[UI0ColorRole_Focus],
+        border->color == theme->colors[UI0ColorRole_Focus] &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                 filter->id) == 1 &&
+        collect_one_pixel_draws_for_source(
+          &frame, UI0DrawOp_ControlFill, filter->id, 0, 0, 0) == 0,
         "Bookmarks filter selection emits one bounded action and preserves "
-        "the closing frame's exact open-trigger draw state");
+        "the closing frame's exact open-trigger draw state without a focus "
+        "corner seam");
   memset(&frame_input, 0, sizeof(frame_input));
   build_input.frame_index += 1;
   check(reader_view_build(&build_input, &storage, &frame),
@@ -2439,9 +2565,13 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
         (border->flags &
          (UI0DrawFlag_Open | UI0DrawFlag_Active |
           UI0DrawFlag_FocusVisible)) == 0 &&
-        border->color == theme->colors[UI0ColorRole_Focus] && command == 0,
+        border->color == theme->colors[UI0ColorRole_Focus] && command == 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                 filter->id) == 1 &&
+        collect_one_pixel_draws_for_source(
+          &frame, UI0DrawOp_ControlFill, filter->id, 0, 0, 0) == 0,
         "settled Bookmarks trigger retains its exact filter/focus state with "
-        "the frozen focused border and no separate Focus-ring command");
+        "the frozen focused border and no Focus-ring or corner-seam command");
 
   projection.right.available_filters = ReaderViewRightFilterFlag_All;
   state.popup = ReaderViewPopup_RightFilter;

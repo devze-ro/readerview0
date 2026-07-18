@@ -45,6 +45,7 @@ enum
   RV_RIGHT_FILTER_ROW_GAP = 3,
   RV_RIGHT_FILTER_TEXT_PADDING_X = 10,
   RV_RIGHT_FILTER_ICON_SIZE = 14,
+  RV_RIGHT_FILTER_CORNER_FOCUS_COVERAGE = 96,
   RV_FIND_CARET_HEIGHT = 20,
   RV_RIGHT_TEXT_LINE_HEIGHT = 20,
   RV_RIGHT_TEXT_STACK_GAP = 6,
@@ -5410,6 +5411,78 @@ rv_gutter_pointer_down(const RVBuildContext *ctx, UI0ID id)
                           hot_rect);
 }
 
+static UI0U32
+rv_color_blend_channel(UI0Color base,
+                       UI0Color ink,
+                       UI0U32 shift,
+                       UI0U32 coverage)
+{
+  UI0U32 base_channel = (base >> shift) & 0xFFu;
+  UI0U32 ink_channel = (ink >> shift) & 0xFFu;
+  UI0U64 numerator;
+  if (coverage > 255u) coverage = 255u;
+  numerator = (UI0U64)base_channel * (255u - coverage) +
+              (UI0U64)ink_channel * coverage + 127u;
+  return (UI0U32)(numerator / 255u);
+}
+
+static UI0Color
+rv_color_blend_coverage(UI0Color base,
+                        UI0Color ink,
+                        UI0U32 coverage)
+{
+  return (rv_color_blend_channel(base, ink, 24, coverage) << 24) |
+         (rv_color_blend_channel(base, ink, 16, coverage) << 16) |
+         (rv_color_blend_channel(base, ink, 8, coverage) << 8) |
+         rv_color_blend_channel(base, ink, 0, coverage);
+}
+
+static void
+rv_add_right_filter_focus_corner_seams(RVBuildContext *ctx)
+{
+  UI0ID id = rv_id(304, 0);
+  UI0ControlRecord *record = rv_control_record_for_id(ctx, id);
+  UI0Rect corners[4];
+  UI0Color color;
+  UI0S32 index;
+  if (!ctx || !ctx->input || !ctx->input->theme || !record ||
+      record->rect.w <= 0 || record->rect.h <= 0 ||
+      (record->state & (UI0ControlState_Focused |
+                        UI0ControlState_FocusVisible)) !=
+        (UI0ControlState_Focused | UI0ControlState_FocusVisible) ||
+      (record->state & (UI0ControlState_Disabled |
+                        UI0ControlState_BlockedByRoot)) != 0)
+    return;
+
+  color = rv_color_blend_coverage(
+    ctx->input->theme->colors[UI0ColorRole_Surface],
+    ctx->input->theme->colors[UI0ColorRole_Focus],
+    RV_RIGHT_FILTER_CORNER_FOCUS_COVERAGE);
+  corners[0] = rv_rect(record->rect.x, record->rect.y, 1, 1);
+  corners[1] = rv_rect(record->rect.x + record->rect.w - 1,
+                       record->rect.y, 1, 1);
+  corners[2] = rv_rect(record->rect.x,
+                       record->rect.y + record->rect.h - 1, 1, 1);
+  corners[3] = rv_rect(record->rect.x + record->rect.w - 1,
+                       record->rect.y + record->rect.h - 1, 1, 1);
+  for (index = 0; index < 4; ++index)
+  {
+    UI0DrawCommand command;
+    memset(&command, 0, sizeof(command));
+    command.op = UI0DrawOp_ControlFill;
+    command.source_id = record->id;
+    command.source_kind = record->kind;
+    command.source_index = record->box_index;
+    command.rect = corners[index];
+    command.clip_rect = record->clip_rect;
+    command.color = color;
+    command.stroke_color = color;
+    command.flags = UI0DrawFlag_RadiusExplicit;
+    command.corner_radius = 0;
+    (void)ui0_draw_push_command(&ctx->draw, command);
+  }
+}
+
 static void
 rv_filter_reference_chrome_draws(RVBuildContext *ctx)
 {
@@ -5596,6 +5669,7 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
     ctx->draw.commands[write_index++] = command;
   }
   ctx->draw.command_count = write_index;
+  rv_add_right_filter_focus_corner_seams(ctx);
 }
 
 static void
