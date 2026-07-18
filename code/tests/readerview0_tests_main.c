@@ -2309,17 +2309,18 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   check(state.popup == ReaderViewPopup_None &&
         state.restore_focus_id == 0 && filter &&
         state.focus_id == filter->id && state.focus_visible &&
-        (filter->flags & ReaderViewSemantic_Focused) != 0 && command != 0 &&
-        command->color == theme->colors[UI0ColorRole_Focus] &&
-        border && border->color == theme->colors[UI0ColorRole_Border] &&
+        (filter->flags & ReaderViewSemantic_Focused) != 0 && command == 0 &&
+        border && border->color == theme->colors[UI0ColorRole_Focus] &&
         (border->flags &
          (UI0DrawFlag_Focused | UI0DrawFlag_FocusVisible)) ==
           (UI0DrawFlag_Focused | UI0DrawFlag_FocusVisible) &&
         (border->flags & (UI0DrawFlag_Open | UI0DrawFlag_Active)) == 0 &&
-        rect_equal(command->rect, ui0_rect(1078, 66, 24, 24)) &&
-        rect_equal(command->clip_rect, ui0_rect(1078, 66, 24, 24)),
-        "Filter Escape restores one Focus ring over the normal trigger "
-        "border without double Focus compositing");
+        rect_equal(border->rect, ui0_rect(1078, 66, 24, 24)) &&
+        rect_equal(border->clip_rect, ui0_rect(1078, 66, 24, 24)) &&
+        count_draw_op_for_source(&frame, UI0DrawOp_FocusRing,
+                                 filter->id) == 0,
+        "Filter Escape restores the frozen focused trigger border and "
+        "suppresses its separate double-composited Focus ring");
 
   state.left_panel = ReaderViewLeftPanel_Contents;
   state.right_panel_open = 1;
@@ -2438,9 +2439,9 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
         (border->flags &
          (UI0DrawFlag_Open | UI0DrawFlag_Active |
           UI0DrawFlag_FocusVisible)) == 0 &&
-        border->color == theme->colors[UI0ColorRole_Border] && command == 0,
+        border->color == theme->colors[UI0ColorRole_Focus] && command == 0,
         "settled Bookmarks trigger retains its exact filter/focus state with "
-        "the normal border and no invisible Focus overpaint");
+        "the frozen focused border and no separate Focus-ring command");
 
   projection.right.available_filters = ReaderViewRightFilterFlag_All;
   state.popup = ReaderViewPopup_RightFilter;
@@ -3778,6 +3779,11 @@ test_frozen_note_editor_composition(const UI0ResolvedTheme *theme)
   const UI0TextAreaRowRecord *text_row;
   const UI0DrawCommand *row_draw;
   const UI0DrawCommand *caret_draw;
+  const UI0DrawCommand *corner_draws;
+  UI0Rect corner_rects[4];
+  UI0ID editor_id;
+  UI0B32 corner_masks_exact;
+  UI0S32 index;
   UI0U64 frame_index = 901;
 
   memset(&layout_input, 0, sizeof(layout_input));
@@ -3806,6 +3812,7 @@ test_frozen_note_editor_composition(const UI0ResolvedTheme *theme)
   dialog = find_semantic_role(&frame, "Note", ReaderViewSemantic_Dialog);
   editor = find_semantic_role(&frame, "Note text",
                               ReaderViewSemantic_TextArea);
+  editor_id = editor ? editor->id : 0;
   delete_note = find_semantic(&frame, "Delete note");
   cancel_note = find_semantic(&frame, "Cancel note");
   save_note = find_semantic(&frame, "Save note");
@@ -3849,10 +3856,34 @@ test_frozen_note_editor_composition(const UI0ResolvedTheme *theme)
                    ui0_rect(325, 180, 476, 228)) &&
         caret_draw->color == theme->colors[UI0ColorRole_Focus] &&
         count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
-                                 editor ? editor->id : 0) == 1,
+                                 editor ? editor->id : 0) == 5,
         "note body restores proportional 18px system-UI text, 25px rows, "
         "and the frozen 23px caret through explicit caller metadata without "
         "the Find-only full-field clip patch");
+  corner_rects[0] = ui0_rect(317, 167, 1, 1);
+  corner_rects[1] = ui0_rect(808, 167, 1, 1);
+  corner_rects[2] = ui0_rect(317, 414, 1, 1);
+  corner_rects[3] = ui0_rect(808, 414, 1, 1);
+  corner_draws = frame.draw_command_count >= 4 ?
+    frame.draw_commands + frame.draw_command_count - 4 : 0;
+  corner_masks_exact = corner_draws != 0;
+  for (index = 0; index < 4 && corner_masks_exact; ++index)
+  {
+    const UI0DrawCommand *corner = corner_draws + index;
+    corner_masks_exact =
+      corner->op == UI0DrawOp_ControlFill &&
+      corner->source_id == editor_id &&
+      corner->source_kind == UI0ControlKind_TextArea &&
+      rect_equal(corner->rect, corner_rects[index]) &&
+      rect_equal(corner->clip_rect, text_area->clip_rect) &&
+      corner->color == theme->colors[UI0ColorRole_SurfaceElevated] &&
+      corner->stroke_color == corner->color &&
+      (corner->flags & UI0DrawFlag_RadiusExplicit) != 0 &&
+      corner->corner_radius == 0;
+  }
+  check(corner_masks_exact,
+        "note TextArea appends exactly four ordered 1px SurfaceElevated "
+        "corner masks after every border/focus/text draw");
 
   check(delete_note &&
         rect_equal(delete_note->rect, ui0_rect(317, 431, 74, 30)) &&
@@ -3903,8 +3934,16 @@ test_frozen_note_editor_composition(const UI0ResolvedTheme *theme)
           (UI0TextAreaState_Focused | UI0TextAreaState_FocusVisible),
         "note modal focus wraps from Save to the real text area");
 
-  check(reader_view_close_note_editor(&state),
+  check(reader_view_close_note_editor(&state) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
         "frozen editing note closes before Add Note coverage");
+  check(find_semantic_role(&frame, "Note text",
+                           ReaderViewSemantic_TextArea) == 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                 editor_id) == 0,
+        "note corner seam masks retire with the NoteEditor TextArea and do "
+        "not leak into the ordinary reader frame");
   memset(&input, 0, sizeof(input));
   projection.selection.selection_key = 5051;
   projection.selection.revision = 13;

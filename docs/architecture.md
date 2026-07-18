@@ -221,12 +221,12 @@ remain unchanged, and child hover/press state is reflected only into parent-row
 paint. Thus Body, Star, and Menu pointer releases are mutually exclusive; even
 a disabled Menu owns its right-edge region without selecting the row. Keyboard
 and native-accessibility row activation continue through the full semantic
-identity. The shell-free star
-raster preblends against `SurfaceElevated` while unstarred and `Badge` while
-starred. An enabled filter trigger uses the Focus border color only while open
-or active. Focused and focus-visible states retain the normal Border color;
-focus-visible publishes the separate clipped Focus ring once, avoiding doubled
-rounded-corner compositing. The Annotations title and
+identity. The shell-free star raster preblends against `SurfaceElevated` while
+unstarred and `Badge` while
+starred. An enabled filter trigger uses the Focus border color while open,
+active, focused, or focus-visible. Readerview0 suppresses the separate UI0
+FocusRing command only for this trigger, so the frozen rounded border carries
+focus once without double compositing. The Annotations title and
 20 px section heading, like the visible Find-input text, each have one exact
 shared text draw and binding. Hosts own translation of those records through
 their concrete system-UI renderer, so glyph-raster differences are host adapter
@@ -297,7 +297,10 @@ selection paint by one pixel to 23 px. Note rows carry proportional
 caller-supplied advances and explicit 18 px system-UI raster metadata; the
 focused empty placeholder uses its separate x+8/y+7 box. The adapter restores
 the copied pointer input before any other control is built and does not alter
-signals outside the editor shell.
+signals outside the editor shell. After the note TextArea's ordinary draw
+sequence, four ordered 1 by 1 `SurfaceElevated` commands cover only its extreme
+corners. These bounded seam masks preserve every adjacent focus-border pixel,
+TextArea hit/focus state, and all non-note frames.
 
 Page gutters keep their large host-independent action rectangles separate from
 the 44 by 88 painted targets. UI0's filled 18 by 32 PageCaretLeft/Right records

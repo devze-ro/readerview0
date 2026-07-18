@@ -5473,6 +5473,8 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
         (command.flags & (UI0DrawFlag_Hovered | UI0DrawFlag_Active)) == 0));
     UI0B32 manual_find_input = command.source_id == find_input_id;
     if (manual_find_input ||
+        (command.source_id == right_filter_id &&
+         command.op == UI0DrawOp_FocusRing) ||
         gutter_shell || hidden_progress_thumb || left_panel_shell ||
         star_shell || right_row_shell ||
         rv_has_sidenav_visual(ctx, command.source_id) ||
@@ -5545,14 +5547,11 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
         command.op == UI0DrawOp_ControlBorder &&
         (command.flags & UI0DrawFlag_Disabled) == 0 &&
         (command.flags & (UI0DrawFlag_Open |
+                          UI0DrawFlag_Focused |
+                          UI0DrawFlag_FocusVisible |
                           UI0DrawFlag_Active)) != 0)
     {
       command.color = ctx->input->theme->colors[UI0ColorRole_Focus];
-    }
-    if (command.source_id == right_filter_id &&
-        command.op == UI0DrawOp_FocusRing)
-    {
-      command.rect = command.clip_rect;
     }
     if (command.source_id == progress_label_id &&
         command.op == UI0DrawOp_Text)
@@ -5628,6 +5627,42 @@ rv_restore_find_caret_clip(RVBuildContext *ctx, UI0S32 draw_start)
     if (command->source_id == find_input_id &&
         command->op == UI0DrawOp_TextCaret)
       command->clip_rect = field_clip;
+  }
+}
+
+static void
+rv_add_note_editor_corner_masks(RVBuildContext *ctx,
+                                const UI0TextAreaRecord *record)
+{
+  UI0Rect corners[4];
+  UI0S32 index;
+  if (!ctx || !ctx->input || !ctx->input->state || !record ||
+      ctx->input->state->popup != ReaderViewPopup_NoteEditor ||
+      record->id == 0 || record->rect.w <= 0 || record->rect.h <= 0)
+    return;
+  corners[0] = rv_rect(record->rect.x, record->rect.y, 1, 1);
+  corners[1] = rv_rect(record->rect.x + record->rect.w - 1,
+                       record->rect.y, 1, 1);
+  corners[2] = rv_rect(record->rect.x,
+                       record->rect.y + record->rect.h - 1, 1, 1);
+  corners[3] = rv_rect(record->rect.x + record->rect.w - 1,
+                       record->rect.y + record->rect.h - 1, 1, 1);
+  for (index = 0; index < 4; ++index)
+  {
+    UI0DrawCommand command;
+    memset(&command, 0, sizeof(command));
+    command.op = UI0DrawOp_ControlFill;
+    command.source_id = record->id;
+    command.source_kind = UI0ControlKind_TextArea;
+    command.source_index = record->box_index;
+    command.rect = corners[index];
+    command.clip_rect = record->clip_rect;
+    command.color =
+      ctx->input->theme->colors[UI0ColorRole_SurfaceElevated];
+    command.stroke_color = command.color;
+    command.flags = UI0DrawFlag_RadiusExplicit;
+    command.corner_radius = 0;
+    (void)ui0_draw_push_command(&ctx->draw, command);
   }
 }
 
@@ -7503,6 +7538,7 @@ reader_view_build(const ReaderViewBuildInput *input,
             input->theme->colors[UI0ColorRole_Focus];
         }
       }
+      rv_add_note_editor_corner_masks(&ctx, record);
     }
   }
 

@@ -152,9 +152,11 @@ labels are `All (1)`, `All Highlight Colors (0)`, `Notes (0)`, and
 `(1086,106,3,17)`. Option text uses the frozen ten-pixel horizontal padding;
 the first text rect is `(1106,100,254,29)`. The filter trigger retains its
 14 by 14 Select icon at `(1083,71)`. Escape is keyboard input, so it restores
-the trigger with visible focus, a normal Border-colored shell, and one clipped
-Focus ring over the full `(1078,66,24,24)` perimeter. Active and open trigger
-states retain the Focus-colored border; focus alone does not double it.
+the trigger with visible focus and one Focus-colored border over the full
+`(1078,66,24,24)` perimeter. Active, open,
+focused, and focus-visible states all retain that border; the separate UI0
+FocusRing command is suppressed only for this trigger so it is not composited
+twice.
 
 ## TOC behavior
 
@@ -367,6 +369,11 @@ note; visible edit copy remains Delete, Close, Save, while Add Note omits Delete
 and paints Cancel.
 Opening either composition moves visible focus into the TextArea, matching the
 frozen editor rather than leaving a pointer-opened modal without a focus cue.
+After every ordinary TextArea border/focus/text/caret command, the shared frame
+appends four ordered 1 by 1 `SurfaceElevated` fills at `(317,167)`, `(808,167)`,
+`(317,414)`, and `(808,414)`. They mask only the extreme shell corners; every
+adjacent focus pixel, input record, hit target, and focus state remains intact,
+and no mask survives outside NoteEditor.
 
 Save and Delete continue to return host-executed actions. A host calls
 `reader_view_close_note_editor` only after the corresponding persistence
@@ -459,8 +466,8 @@ Strict MSVC C11 `/W4 /WX` validation covers:
   right-edge ownership, unchanged full-row accessibility invocation, all three exact
   kind-specific action matrices, anchored and bottom-flipped popup geometry,
   pointer/keyboard focus entry, native names, four exact filter-specific empty
-  states, exact active/open Focus border, normal Escape/settled-focus border,
-  single clipped Focus ring, preserved Bookmarks selection, dynamic-membership closure,
+  states, exact active/open/focused Focus border, suppressed filter FocusRing,
+  preserved Bookmarks selection, dynamic-membership closure,
   scroll reset, and bounded popup containment;
 - close-before-action and trigger-focus restoration for every applicable
   Go To/Add-Remove Star/Edit Note/kind-specific Delete path, including direct
@@ -476,8 +483,8 @@ Strict MSVC C11 `/W4 /WX` validation covers:
   validation, same-frame fallback and next-frame scalar refresh, exact
   NoteEditor/Body/18 px carrier, +13/+7 placeholder/content geometry, nine
   complete 25 px rows, first/last-row pointer and 23 px caret mapping,
-  nine-record selection clipping, quantized scroll, and outside-shell signal
-  identity;
+  nine-record selection clipping, quantized scroll, four ordered 1 px extreme
+  corner masks with closed-editor isolation, and outside-shell signal identity;
 - one-build accessibility request consumption, same-frame atomic focus
   evidence, including failed-build non-replay, deferred panel focus handoff and
   Escape cancellation, popup/modal root containment, all-projected-row and

@@ -68,10 +68,10 @@ the frozen parent-row paint. Body, Star, and Menu pointer releases therefore
 return mutually exclusive row, toggle, or popup outcomes, and a disabled Menu
 cannot fall through into row selection. Keyboard and native-accessibility row
 activation continue through the full semantic row. An unstarred icon preblends
-against `SurfaceElevated`; a starred icon preblends against `Badge`. A
-pressed or open filter trigger paints its border with the resolved Focus
-color. Focus-only and focus-visible trigger borders remain normal; visible
-focus is represented once by the separate clipped Focus ring. Its
+against `SurfaceElevated`; a starred icon preblends against `Badge`. An
+active, open, focused, or focus-visible filter trigger paints its border with
+the resolved Focus color. The filter alone suppresses UI0's additional Focus
+ring so visible focus is represented once by the frozen rounded border. Its
 row-action popup is anchored to the exact row menu, flips
 at the panel edge, and exposes the frozen Bookmark, Note, or Highlight action
 matrix. Every kind retains its inline star; only Highlight carries Star in the
@@ -115,6 +115,11 @@ explicit Body/18 px draw carrier let each host rasterize from the published
 command without retaining build input. Same-frame unlisted text uses the
 caller fallback; a refreshed next-frame scalar table updates wrap, hit, and
 caret geometry without losing draft or focus.
+
+After the note TextArea finishes its normal border/focus draw, four bounded
+1 by 1 `SurfaceElevated` records mask only the extreme shell corners. Adjacent
+focus pixels, TextArea state, and hit geometry remain unchanged, and the masks
+retire with the note editor.
 
 All projected prior-frame row keys and published popup-item identities are
 retained only in fixed-capacity caller-owned state. Each build reconciles
