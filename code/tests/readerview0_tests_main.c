@@ -1802,8 +1802,8 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   icon = filter ? find_icon_for_source(&frame, filter->id) : 0;
   check(fill != 0 && border != 0 && icon != 0 &&
         icon->stroke_color == fill->color &&
-        rect_equal(icon->rect, ui0_rect(1081, 69, 18, 18)),
-        "Annotations filter restores its frozen outlined 18px Select icon "
+        rect_equal(icon->rect, ui0_rect(1083, 71, 14, 14)),
+        "Annotations filter restores its frozen outlined 14px Select icon "
         "shell");
   node = find_semantic_control_source(
     &frame, ReaderViewSemanticControl_RightExport, 0);
@@ -1866,7 +1866,7 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   check(icon != 0 && icon->icon_kind == UI0IconKind_Star &&
         rect_equal(icon->rect, ui0_rect(1323, 154, 14, 14)) &&
         icon->color == theme->colors[UI0ColorRole_TextMuted] &&
-        icon->stroke_color == theme->colors[UI0ColorRole_Surface] &&
+        icon->stroke_color == theme->colors[UI0ColorRole_Badge] &&
         count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
                                  node ? node->id : 0) == 0 &&
         count_draw_op_for_source(&frame, UI0DrawOp_ControlBorder,
@@ -2465,6 +2465,16 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
               variant->count,
             "annotation action popup restores frozen anchored geometry and "
             "kind-specific row count");
+      row = find_semantic_control_source(
+        &frame, ReaderViewSemanticControl_RightRow, 70);
+      fill = row ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                        row->id) : 0;
+      check(row && fill &&
+            fill->color == theme->colors[UI0ColorRole_SurfaceElevated] &&
+            count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                     row->id) == 1,
+            "open annotation action menu retains the frozen elevated owner "
+            "row fill");
       for (index = 0; index < variant->count; ++index)
       {
         option = find_semantic_control_source(
@@ -3513,6 +3523,166 @@ test_open_panel_focus_boundaries(const UI0ResolvedTheme *theme)
 }
 
 static void
+test_frozen_note_editor_composition(const UI0ResolvedTheme *theme)
+{
+  static ReaderViewState state;
+  static ReaderViewFrameStorage storage;
+  ReaderViewSettingControl settings[READER_VIEW_SETTING_CAP];
+  ReaderViewChoice choices[8];
+  ReaderViewTocRow toc_rows[2];
+  ReaderViewFindRow find_rows[1];
+  ReaderViewRightRow right_rows[1];
+  ReaderViewCodepointAdvance advances[127];
+  ReaderViewProjection projection = full_projection(
+    settings, choices, toc_rows, find_rows, right_rows);
+  ReaderViewLayoutInput layout_input;
+  ReaderViewLayout layout;
+  ReaderViewInput input;
+  ReaderViewFrame frame;
+  const ReaderViewSemanticNode *dialog;
+  const ReaderViewSemanticNode *editor;
+  const ReaderViewSemanticNode *delete_note;
+  const ReaderViewSemanticNode *cancel_note;
+  const ReaderViewSemanticNode *save_note;
+  const ReaderViewTextBinding *binding;
+  const UI0ControlRecord *control;
+  const UI0TextAreaRecord *text_area;
+  const UI0TextAreaRowRecord *text_row;
+  const UI0DrawCommand *row_draw;
+  UI0U64 frame_index = 900;
+
+  memset(&layout_input, 0, sizeof(layout_input));
+  layout_input.bounds = ui0_rect(0, 0, 1400, 780);
+  memset(&layout, 0, sizeof(layout));
+  memset(&input, 0, sizeof(input));
+  reader_view_state_reset_document(&state, projection.document_key);
+  state.right_panel_open = 1;
+  memset(&projection.selection, 0, sizeof(projection.selection));
+  projection.selection.status = ready_status();
+  projection.selection.selection_key = 5050;
+  projection.selection.revision = 12;
+  projection.selection.flags = ReaderViewSelection_Active |
+    ReaderViewSelection_CanEditNote |
+    ReaderViewSelection_CanDeleteNote;
+  projection.selection.note_text.data = "Attached parity note";
+  projection.selection.note_text.size = 20;
+
+  check(reader_view_open_note_editor(&state, &projection.selection) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "frozen anchored note editor builds");
+  check(rect_equal(layout.content_rect, ui0_rect(255, 124, 556, 550)),
+        "right-panel reader content keeps the frozen note anchor geometry");
+
+  dialog = find_semantic_role(&frame, "Note", ReaderViewSemantic_Dialog);
+  editor = find_semantic_role(&frame, "Note text",
+                              ReaderViewSemantic_TextArea);
+  delete_note = find_semantic(&frame, "Delete note");
+  cancel_note = find_semantic(&frame, "Cancel note");
+  save_note = find_semantic(&frame, "Save note");
+  check(dialog && rect_equal(dialog->rect, ui0_rect(303, 117, 520, 360)) &&
+        editor && rect_equal(editor->rect, ui0_rect(317, 167, 492, 248)) &&
+        text_equal(editor->value, "Attached parity note") &&
+        (editor->flags & (ReaderViewSemantic_Enabled |
+                          ReaderViewSemantic_Focusable |
+                          ReaderViewSemantic_Focused)) ==
+          (ReaderViewSemantic_Enabled | ReaderViewSemantic_Focusable |
+           ReaderViewSemantic_Focused),
+        "note modal and real multiline text area restore frozen anchored "
+        "geometry and native value semantics");
+
+  text_area = storage.text_area_records;
+  text_row = text_area->row_count > 0 ?
+    storage.note_text_area_row_records + text_area->row_start : 0;
+  row_draw = text_row ?
+    find_draw_for_rect(&frame, UI0DrawOp_Text, text_row->rect) : 0;
+  binding = row_draw ? find_text_binding(&frame, row_draw->source_id) : 0;
+  check(text_area->id == (editor ? editor->id : 0) &&
+        rect_equal(text_area->rect, ui0_rect(317, 167, 492, 248)) &&
+        rect_equal(text_area->text_rect, ui0_rect(325, 175, 476, 232)) &&
+        (text_area->state & (UI0TextAreaState_Focused |
+                             UI0TextAreaState_FocusVisible)) ==
+          (UI0TextAreaState_Focused | UI0TextAreaState_FocusVisible) &&
+        text_area->row_count == 1 && text_row &&
+        text_row->rect.y == text_area->text_rect.y &&
+        row_draw && binding && text_equal(binding->text,
+                                          "Attached parity note") &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                 editor ? editor->id : 0) == 1,
+        "note body is a UI0 TextArea with top-aligned caller-bound row text");
+
+  check(delete_note &&
+        rect_equal(delete_note->rect, ui0_rect(317, 431, 74, 30)) &&
+        cancel_note &&
+        rect_equal(cancel_note->rect, ui0_rect(675, 431, 62, 30)) &&
+        save_note && rect_equal(save_note->rect,
+                                ui0_rect(747, 431, 62, 30)),
+        "note Delete, Close, and Save targets restore frozen composition");
+  control = delete_note ? find_control_for_source(&storage,
+                                                   delete_note->id) : 0;
+  binding = delete_note ? find_text_binding(&frame, delete_note->id) : 0;
+  check(control && (control->control_flags & UI0Control_Destructive) != 0 &&
+        binding && text_equal(binding->text, "Delete"),
+        "note Delete keeps its destructive native name and frozen copy");
+  control = cancel_note ? find_control_for_source(&storage,
+                                                   cancel_note->id) : 0;
+  binding = cancel_note ? find_text_binding(&frame, cancel_note->id) : 0;
+  check(control && (control->control_flags & UI0Control_Quiet) != 0 &&
+        binding && text_equal(binding->text, "Close"),
+        "editing note Cancel action keeps the frozen quiet Close copy");
+  control = save_note ? find_control_for_source(&storage, save_note->id) : 0;
+  binding = save_note ? find_text_binding(&frame, save_note->id) : 0;
+  check(control && (control->control_flags & UI0Control_Primary) != 0 &&
+        (control->control_flags & UI0Control_Disabled) == 0 &&
+        binding && text_equal(binding->text, "Save"),
+        "unchanged matching note keeps the frozen enabled primary Save");
+
+  input.ui = ui0_input_keyboard(0, 1, 0);
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        delete_note && state.focus_id == delete_note->id &&
+        (storage.text_area_records[0].state &
+         (UI0TextAreaState_Focused | UI0TextAreaState_FocusVisible)) == 0,
+        "note modal Tab order moves from text to Delete");
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        cancel_note && state.focus_id == cancel_note->id,
+        "note modal Tab order moves from Delete to Cancel");
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        save_note && state.focus_id == save_note->id,
+        "note modal Tab order moves from Cancel to Save");
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        editor && state.focus_id == editor->id &&
+        (storage.text_area_records[0].state &
+         (UI0TextAreaState_Focused | UI0TextAreaState_FocusVisible)) ==
+          (UI0TextAreaState_Focused | UI0TextAreaState_FocusVisible),
+        "note modal focus wraps from Save to the real text area");
+
+  check(reader_view_close_note_editor(&state),
+        "frozen editing note closes before Add Note coverage");
+  memset(&input, 0, sizeof(input));
+  projection.selection.selection_key = 5051;
+  projection.selection.revision = 13;
+  projection.selection.flags = ReaderViewSelection_Active |
+    ReaderViewSelection_CanAddNote;
+  projection.selection.note_text.data = 0;
+  projection.selection.note_text.size = 0;
+  check(reader_view_open_note_editor(&state, &projection.selection) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "frozen Add Note composition builds");
+  dialog = find_semantic_role(&frame, "Add Note", ReaderViewSemantic_Dialog);
+  cancel_note = find_semantic(&frame, "Cancel note");
+  binding = cancel_note ? find_text_binding(&frame, cancel_note->id) : 0;
+  check(dialog && rect_equal(dialog->rect, ui0_rect(303, 117, 520, 360)) &&
+        find_semantic(&frame, "Delete note") == 0 &&
+        cancel_note && binding && text_equal(binding->text, "Cancel"),
+        "Add Note omits Delete and uses the frozen Cancel copy");
+}
+
+static void
 test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
 {
   static ReaderViewState state;
@@ -3568,7 +3738,7 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
         lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                         theme, advances, &storage, &frame, frame_index++),
         "public note editor enters the modal root");
-  node = find_semantic_role(&frame, note_text, ReaderViewSemantic_TextArea);
+  node = find_semantic_role(&frame, "Note text", ReaderViewSemantic_TextArea);
   check(node && (node->flags & ReaderViewSemantic_Focused) != 0 &&
         state.focus_id == node->id,
         "note modal moves focus into its text area");
@@ -3581,10 +3751,11 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
   input.move_vertical_delta = -1;
   check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                         theme, advances, &storage, &frame, frame_index++) &&
-        state.note_input.caret == 60,
-        "note vertical movement is applied once when host deltas mirror");
+        state.note_input.caret == 41,
+        "note vertical movement follows the real wrapped row once when host "
+        "deltas mirror");
   memset(&input, 0, sizeof(input));
-  node = find_semantic(&frame, "Cancel");
+  node = find_semantic(&frame, "Cancel note");
   check(node && reader_view_accessibility_focus(&state, node->id) &&
         lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                         theme, advances, &storage, &frame, frame_index++),
@@ -3603,7 +3774,7 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
                          theme, advances, &storage, &frame, frame_index++) &&
         (frame.error_flags & ReaderViewFrameError_StaleNoteRevision) != 0,
         "stale note revision build");
-  node = find_semantic(&frame, "Delete");
+  node = find_semantic(&frame, "Delete note");
   check(node && (node->flags & ReaderViewSemantic_Enabled) == 0 &&
         reader_view_accessibility_invoke(&state, node->id) &&
         !lifecycle_build(&state, &layout_input, &layout, &projection, &input,
@@ -3616,7 +3787,7 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
   check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                         theme, advances, &storage, &frame, frame_index++),
         "matching note revision restores an eligible modal");
-  node = find_semantic_role(&frame, note_text,
+  node = find_semantic_role(&frame, "Note text",
                             ReaderViewSemantic_TextArea);
   check(node && reader_view_accessibility_focus(&state, node->id) &&
         lifecycle_build(&state, &layout_input, &layout, &projection, &input,
@@ -3661,7 +3832,7 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
         lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                         theme, advances, &storage, &frame, frame_index++),
         "matching note editor reopens for Delete acknowledgement lifecycle");
-  node = find_semantic_role(&frame, note_text, ReaderViewSemantic_TextArea);
+  node = find_semantic_role(&frame, "Note text", ReaderViewSemantic_TextArea);
   check(node && reader_view_accessibility_focus(&state, node->id) &&
         lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                         theme, advances, &storage, &frame, frame_index++),
@@ -3673,7 +3844,7 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
         state.note_dirty && reader_view_note_draft(&state).size == 101,
         "Delete lifecycle creates a retryable dirty draft");
   memset(&input, 0, sizeof(input));
-  node = find_semantic(&frame, "Delete");
+  node = find_semantic(&frame, "Delete note");
   check(node && reader_view_accessibility_invoke(&state, node->id) &&
         lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                         theme, advances, &storage, &frame, frame_index++),
@@ -4726,6 +4897,7 @@ main(void)
   test_reference_panels_and_disabled_gutter(&theme);
   test_focus_root_and_refresh_lifecycle(&theme);
   test_open_panel_focus_boundaries(&theme);
+  test_frozen_note_editor_composition(&theme);
   test_modal_feature_and_scroll_lifecycle(&theme);
 
   geometry_style = reader_view_default_content_geometry_style();
@@ -5529,7 +5701,7 @@ main(void)
         find_action(&frame, ReaderViewAction_CancelNote) == 0,
         "dirty note Escape preserves the draft and requires explicit Cancel");
   memset(&frame_input, 0, sizeof(frame_input));
-  node = find_semantic(&frame, "Cancel");
+  node = find_semantic(&frame, "Cancel note");
   check(node != 0 && reader_view_accessibility_invoke(&state, node->id),
         "note Cancel accessibility invoke queues through the shared control");
   build_input.frame_index += 1;

@@ -29,6 +29,8 @@ enum
   READER_VIEW_REFERENCE_SIDENAV_RECORD_CAP = READER_VIEW_TOC_ROW_CAP + 2,
   READER_VIEW_TEXT_INPUT_CAP = 1,
   READER_VIEW_TEXT_AREA_CAP = 1,
+  READER_VIEW_TEXT_AREA_ROW_CAP = READER_VIEW_NOTE_DRAFT_CAP,
+  READER_VIEW_TEXT_AREA_SELECTION_CAP = 64,
   READER_VIEW_SLIDER_CAP = 2,
   READER_VIEW_SCROLL_CAP = 4,
   READER_VIEW_POPUP_ITEM_SNAPSHOT_CAP = 32,
@@ -402,6 +404,13 @@ typedef struct ReaderViewLabels
   ReaderViewText no_notes;
   /* Frozen Find field placeholder; distinct from the ready-status prompt. */
   ReaderViewText find_placeholder;
+  /* API 3 frozen inline-note composition and native names. */
+  ReaderViewText note_title;
+  ReaderViewText add_note_title;
+  ReaderViewText note_text;
+  ReaderViewText note_placeholder;
+  ReaderViewText save;
+  ReaderViewText cancel_note;
 } ReaderViewLabels;
 
 typedef struct ReaderViewProjection
@@ -837,6 +846,13 @@ typedef struct ReaderViewFrameStorage
   char right_filter_labels[4][READER_VIEW_RIGHT_FILTER_LABEL_CAP];
   UI0SidenavRecord
     reference_sidenav_records[READER_VIEW_REFERENCE_SIDENAV_RECORD_CAP];
+  /* API 3 frozen inline-note TextArea evidence remains caller-storage owned. */
+  UI0TextAreaRowRecord
+    note_text_area_row_records[READER_VIEW_TEXT_AREA_ROW_CAP];
+  UI0TextAreaSelectionRecord
+    note_text_area_selection_records[READER_VIEW_TEXT_AREA_SELECTION_CAP];
+  UI0TextAreaRow
+    note_text_area_layout_rows[READER_VIEW_TEXT_AREA_ROW_CAP];
 } ReaderViewFrameStorage;
 
 typedef struct ReaderViewBuildInput

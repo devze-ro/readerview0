@@ -44,13 +44,16 @@ enum
   RV_RIGHT_FILTER_ROW_HEIGHT = 29,
   RV_RIGHT_FILTER_ROW_GAP = 3,
   RV_RIGHT_FILTER_TEXT_PADDING_X = 10,
-  RV_RIGHT_FILTER_ICON_SIZE = 18,
+  RV_RIGHT_FILTER_ICON_SIZE = 14,
   RV_RIGHT_TEXT_LINE_HEIGHT = 20,
   RV_RIGHT_TEXT_STACK_GAP = 6,
   RV_RIGHT_TEXT_BASELINE_OFFSET = 4,
   RV_POPUP_WIDTH = 280,
-  RV_NOTE_WIDTH = 512,
+  RV_NOTE_WIDTH = 520,
   RV_NOTE_HEIGHT = 360,
+  RV_NOTE_ANCHOR_GAP = 12,
+  RV_NOTE_TEXT_ADVANCE = 8,
+  RV_NOTE_TEXT_ROW_ID_BASE = 4096,
   RV_TOOLBAR_CONTROL_WIDTH = 30,
   RV_TOOLBAR_CONTROL_HEIGHT = 28,
   RV_TOOLBAR_CONTROL_GAP = 8,
@@ -109,6 +112,7 @@ typedef struct RVBuildContext
   UI0SignalContext signals;
   UI0DrawContext draw;
   UI0TextInputContext text_inputs;
+  UI0TextAreaContext text_areas;
   UI0SidenavContext sidenav_visuals;
   UI0SliderContext sliders;
   UI0ScrollContext scrolls;
@@ -247,6 +251,24 @@ rv_patch_built_focus(RVBuildContext *ctx,
       if (focus_visible)
       {
         record->state |= UI0TextInputState_FocusVisible;
+        record->signal_flags |= UI0Signal_FocusVisible;
+      }
+    }
+  }
+  for (index = 0; index < ctx->text_areas.record_count; ++index)
+  {
+    UI0TextAreaRecord *record = ctx->text_areas.records + index;
+    if (record->id != id) continue;
+    record->state &= ~(UI0TextAreaState_Focused |
+                       UI0TextAreaState_FocusVisible);
+    record->signal_flags &= ~(UI0Signal_Focused | UI0Signal_FocusVisible);
+    if (focused)
+    {
+      record->state |= UI0TextAreaState_Focused;
+      record->signal_flags |= UI0Signal_Focused;
+      if (focus_visible)
+      {
+        record->state |= UI0TextAreaState_FocusVisible;
         record->signal_flags |= UI0Signal_FocusVisible;
       }
     }
@@ -667,6 +689,12 @@ reader_view_default_english_labels(void)
   labels.no_highlights = rv_literal("No highlights");
   labels.no_notes = rv_literal("No notes");
   labels.find_placeholder = rv_literal("Search in book");
+  labels.note_title = rv_literal("Note");
+  labels.add_note_title = rv_literal("Add Note");
+  labels.note_text = rv_literal("Note text");
+  labels.note_placeholder = rv_literal("Type a note");
+  labels.save = rv_literal("Save");
+  labels.cancel_note = rv_literal("Cancel note");
   return labels;
 }
 
@@ -1382,6 +1410,12 @@ rv_validate_projection(const ReaderViewProjection *projection)
   RV_VALIDATE_LABEL(no_highlights);
   RV_VALIDATE_LABEL(no_notes);
   RV_VALIDATE_LABEL(find_placeholder);
+  RV_VALIDATE_LABEL(note_title);
+  RV_VALIDATE_LABEL(add_note_title);
+  RV_VALIDATE_LABEL(note_text);
+  RV_VALIDATE_LABEL(note_placeholder);
+  RV_VALIDATE_LABEL(save);
+  RV_VALIDATE_LABEL(cancel_note);
 #undef RV_VALIDATE_LABEL
   return errors;
 }
@@ -1454,6 +1488,12 @@ rv_resolve_labels(ReaderViewLabels supplied)
   RV_LABEL(no_highlights);
   RV_LABEL(no_notes);
   RV_LABEL(find_placeholder);
+  RV_LABEL(note_title);
+  RV_LABEL(add_note_title);
+  RV_LABEL(note_text);
+  RV_LABEL(note_placeholder);
+  RV_LABEL(save);
+  RV_LABEL(cancel_note);
 #undef RV_LABEL
   return supplied;
 }
@@ -1897,6 +1937,28 @@ rv_make_control_nonquiet(RVBuildContext *ctx, UI0ID id)
   if (record) record->control_flags &= ~UI0Control_Quiet;
 }
 
+static void
+rv_make_control_primary(RVBuildContext *ctx, UI0ID id)
+{
+  UI0ControlRecord *record = rv_control_record_for_id(ctx, id);
+  if (record)
+  {
+    record->control_flags &= ~UI0Control_Quiet;
+    record->control_flags |= UI0Control_Primary;
+  }
+}
+
+static void
+rv_make_control_quiet(RVBuildContext *ctx, UI0ID id)
+{
+  UI0ControlRecord *record = rv_control_record_for_id(ctx, id);
+  if (record)
+  {
+    record->control_flags &= ~UI0Control_Primary;
+    record->control_flags |= UI0Control_Quiet;
+  }
+}
+
 static UI0SidenavStateFlags
 rv_sidenav_state_from_control(const UI0ControlRecord *control)
 {
@@ -2180,51 +2242,6 @@ rv_find_right_row(const ReaderViewProjection *projection, ReaderViewKey key)
   return 0;
 }
 
-static UI0B32
-rv_apply_text_area(UI0TextInputBuffer *buffer,
-                   UI0TextAreaState *state,
-                   const UI0TextAreaFrameInput *input)
-{
-  UI0B32 edited = 0;
-  UI0S32 delta = input->move_delta;
-  if (input->select_all) ui0_text_area_select_all(buffer, state);
-  if (input->move_start)
-  {
-    if (input->extend_selection) ui0_text_area_select_to_start(buffer, state);
-    else ui0_text_area_move_caret_to_start(buffer, state);
-  }
-  if (input->move_end)
-  {
-    if (input->extend_selection) ui0_text_area_select_to_end(buffer, state);
-    else ui0_text_area_move_caret_to_end(buffer, state);
-  }
-  if (delta)
-  {
-    if (input->extend_selection) ui0_text_area_select_move(buffer, state, delta);
-    else ui0_text_area_move_caret(buffer, state, delta);
-  }
-  if (input->move_vertical_delta)
-  {
-    UI0S32 approximate = input->move_vertical_delta * 40;
-    if (input->extend_selection) ui0_text_area_select_move(buffer, state, approximate);
-    else ui0_text_area_move_caret(buffer, state, approximate);
-  }
-  if (input->copy_pressed && input->transfer_buffer)
-    (void)ui0_text_area_copy_selection(buffer, state, input->transfer_buffer);
-  if (input->cut_pressed && input->transfer_buffer)
-    edited |= ui0_text_area_cut_selection(buffer, state, input->transfer_buffer);
-  if (input->paste_pressed && input->transfer_buffer)
-    edited |= ui0_text_area_try_paste(buffer, state, input->transfer_buffer);
-  if (input->undo_pressed) edited |= ui0_text_area_undo(buffer, state);
-  if (input->redo_pressed) edited |= ui0_text_area_redo(buffer, state);
-  if (input->backspace_pressed) edited |= ui0_text_area_backspace(buffer, state);
-  if (input->delete_pressed) edited |= ui0_text_area_delete(buffer, state);
-  if (input->text_len > 0 && input->text)
-    edited |= ui0_text_area_try_insert_text(buffer, state,
-                                            input->text, input->text_len);
-  return edited;
-}
-
 static void
 rv_copy_note_to_state(ReaderViewState *state,
                       const ReaderViewSelectionProjection *selection)
@@ -2237,6 +2254,8 @@ rv_copy_note_to_state(ReaderViewState *state,
   state->note_selection_key = selection->selection_key;
   state->note_source_revision = selection->revision;
   state->note_dirty = 0;
+  ui0_text_area_state_init(&state->note_input);
+  state->note_input.history = &state->note_history;
   state->note_input.caret = size;
   state->note_input.selection_anchor = size;
   ui0_text_input_history_reset(&state->note_history);
@@ -5017,6 +5036,80 @@ rv_gutter_icon_rect(UI0Rect visual_rect)
                  height);
 }
 
+static UI0Rect
+rv_note_editor_rect(const ReaderViewBuildInput *input)
+{
+  UI0Rect bounds;
+  UI0Rect body;
+  UI0Rect content;
+  UI0Rect anchor;
+  UI0S32 width;
+  UI0S32 height;
+  int64_t min_x;
+  int64_t max_x;
+  int64_t editor_x;
+  int64_t min_y;
+  int64_t max_y;
+  int64_t below_y;
+  int64_t above_y;
+  int64_t editor_y;
+  UI0B32 has_anchor;
+  if (!input || !input->layout || !input->projection)
+    return rv_rect(0, 0, 0, 0);
+
+  bounds = input->layout->bounds;
+  body = input->layout->body_rect;
+  content = input->layout->content_rect;
+  if (body.w <= 0 || body.h <= 0) body = bounds;
+  if (content.w <= 0 || content.h <= 0) content = input->layout->viewport_rect;
+  if (content.w <= 0 || content.h <= 0) content = bounds;
+
+  width = rv_min(RV_NOTE_WIDTH,
+                 rv_max(380, bounds.w / 2));
+  width = rv_min(width, rv_max(bounds.w - RV_INSET * 2, 1));
+  height = rv_min(RV_NOTE_HEIGHT, rv_max(body.h, 1));
+
+  anchor = input->projection->selection.anchor_rect;
+  has_anchor = anchor.w > 0 && anchor.h > 0 &&
+    rv_i64_fits_s32((int64_t)anchor.x + anchor.w) &&
+    rv_i64_fits_s32((int64_t)anchor.y + anchor.h);
+  if (!has_anchor)
+  {
+    anchor = rv_rect(bounds.x + bounds.w / 2,
+                     body.y + 48, 1, 1);
+  }
+
+  min_x = (int64_t)bounds.x + RV_INSET;
+  {
+    int64_t content_min_x = (int64_t)content.x - 12;
+    if (content_min_x > min_x) min_x = content_min_x;
+  }
+  max_x = (int64_t)bounds.x + bounds.w - width - RV_INSET;
+  {
+    int64_t content_max_x =
+      (int64_t)content.x + content.w - width + 12;
+    if (content_max_x < max_x) max_x = content_max_x;
+  }
+  if (max_x < min_x) max_x = min_x;
+  editor_x = (int64_t)anchor.x + anchor.w / 2 - width / 2;
+  if (editor_x < min_x) editor_x = min_x;
+  if (editor_x > max_x) editor_x = max_x;
+
+  min_y = body.y;
+  max_y = (int64_t)body.y + body.h - height;
+  if (max_y < min_y) max_y = min_y;
+  below_y = (int64_t)anchor.y + anchor.h + RV_NOTE_ANCHOR_GAP;
+  above_y = (int64_t)anchor.y - height - RV_NOTE_ANCHOR_GAP;
+  editor_y = below_y <= max_y ? below_y :
+    (above_y >= min_y ? above_y : below_y);
+  if (editor_y < min_y) editor_y = min_y;
+  if (editor_y > max_y) editor_y = max_y;
+
+  if (!rv_i64_fits_s32(editor_x) || !rv_i64_fits_s32(editor_y))
+    return rv_centered_rect(bounds, width, height);
+  return rv_rect((UI0S32)editor_x, (UI0S32)editor_y, width, height);
+}
+
 static UI0B32
 rv_gutter_icon_control(RVBuildContext *ctx,
                        UI0U64 tag,
@@ -5325,9 +5418,13 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
     UI0B32 star_shell = star_row &&
       (command.op == UI0DrawOp_ControlFill ||
        command.op == UI0DrawOp_ControlBorder);
+    UI0B32 right_row_menu_owner = right_row &&
+      ctx->input->state->popup == ReaderViewPopup_RightRowActions &&
+      ctx->input->state->right_menu_key == right_row->key;
     UI0B32 right_row_shell = right_row &&
       (command.op == UI0DrawOp_ControlBorder ||
        (command.op == UI0DrawOp_ControlFill &&
+        !right_row_menu_owner &&
         (command.flags & (UI0DrawFlag_Hovered | UI0DrawFlag_Active)) == 0));
     UI0B32 manual_find_input = command.source_id == find_input_id;
     if (manual_find_input ||
@@ -5369,7 +5466,7 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
           ctx->input->theme->colors[UI0ColorRole_Focus] :
           ctx->input->theme->colors[UI0ColorRole_TextMuted];
       command.stroke_color =
-        ctx->input->theme->colors[UI0ColorRole_Surface];
+        ctx->input->theme->colors[UI0ColorRole_Badge];
     }
     if ((command.source_id == previous_id ||
          command.source_id == next_id) &&
@@ -5454,80 +5551,167 @@ rv_build_note_editor(RVBuildContext *ctx,
   ReaderViewState *state = ctx->input->state;
   const ReaderViewSelectionProjection *selection =
     &ctx->input->projection->selection;
+  UI0BoxDesc box_desc;
   UI0TextInputBuffer buffer;
+  UI0TextAreaSpec text_spec;
+  UI0TextAreaResult text_result;
   UI0Rect editor_rect;
-  UI0Rect button_row;
-  UI0B32 edited;
+  UI0Rect delete_rect;
+  UI0Rect cancel_rect;
+  UI0Rect save_rect;
+  UI0S32 box_index;
+  UI0S32 row_index;
+  UI0B32 matching;
+  UI0B32 editing;
+  UI0B32 delete_invoked;
+  UI0B32 cancel_invoked;
+  UI0B32 save_invoked;
+  ReaderViewText title;
+  ReaderViewText cancel_visual;
   UI0ID editor_id = rv_id(502, state->note_selection_key);
+  UI0ID delete_id = rv_id(505, state->note_selection_key);
+  UI0ID cancel_id = rv_id(504, state->note_selection_key);
+  UI0ID save_id = rv_id(503, state->note_selection_key);
   ctx->modal_id = rv_id(500, state->note_selection_key);
+  matching = state->note_selection_key == selection->selection_key &&
+    state->note_source_revision == selection->revision;
+  editing = (selection->flags & ReaderViewSelection_CanEditNote) != 0;
+  title = editing ? labels.note_title : labels.add_note_title;
+  cancel_visual = editing ? labels.close : labels.cancel;
+
   (void)rv_add_surface(ctx, ctx->modal_id, 0,
                        UI0ControlKind_ModalSurface,
                        ReaderViewSemantic_Dialog,
                        UI0RootKind_Modal,
-                       modal, labels.edit_note);
+                       modal, title);
   rv_add_text_record(ctx, rv_id(501, state->note_selection_key),
                      ctx->modal_id,
-                     rv_rect(modal.x + RV_INSET, modal.y + RV_INSET,
-                             modal.w - RV_INSET * 2, 30),
-                     labels.edit_note, ReaderViewSemantic_Group,
+                     rv_rect(modal.x + 14, modal.y + 14,
+                             rv_max(modal.w - 28, 1), 24),
+                     title, ReaderViewSemantic_Group,
                      ReaderViewSemantic_Enabled, state->note_selection_key);
-  editor_rect = rv_rect(modal.x + RV_INSET, modal.y + 48,
-                        modal.w - RV_INSET * 2, modal.h - 108);
+
+  editor_rect = rv_rect(modal.x + 14, modal.y + 50,
+                        rv_max(modal.w - 28, 1),
+                        rv_max(modal.h - 112, 80));
+  delete_rect = rv_rect(modal.x + 14,
+                        modal.y + modal.h - 46,
+                        74, 30);
+  cancel_rect = rv_rect(modal.x + modal.w - 148,
+                        modal.y + modal.h - 46,
+                        62, 30);
+  save_rect = rv_rect(modal.x + modal.w - 76,
+                      modal.y + modal.h - 46,
+                      62, 30);
+
+  if (state->pending_accessibility_focus_id == editor_id)
+  {
+    state->pending_accessibility_focus_id = 0;
+    rv_move_focus(ctx, editor_id, 1);
+  }
+  if (state->pending_accessibility_invoke_id == editor_id)
+  {
+    state->pending_accessibility_invoke_id = 0;
+    rv_move_focus(ctx, editor_id, 1);
+  }
+
+  box_desc = ui0_box_desc("reader.note_editor.text",
+                          UI0LayoutInvalidIndex,
+                          UI0Axis_X,
+                          ui0_size_fixed(editor_rect.w),
+                          ui0_size_fixed(editor_rect.h));
+  box_desc.flags = UI0BoxFlag_Clip;
+  box_index = ui0_layout_add_box(&ctx->input_layout, &box_desc);
+  if (box_index == UI0LayoutInvalidIndex ||
+      !ui0_layout_solve(&ctx->input_layout, box_index, editor_rect))
+  {
+    ctx->frame->error_flags |= ReaderViewFrameError_RecordCap;
+    return;
+  }
+
   buffer.data = state->note_draft;
   buffer.length = &state->note_draft_length;
   buffer.cap = READER_VIEW_NOTE_DRAFT_CAP;
-  edited = ctx->signals.focus_id == editor_id ?
-    rv_apply_text_area(&buffer, &state->note_input,
-                       &ctx->input->input->note_text) : 0;
-  if (edited)
+  memset(&text_spec, 0, sizeof(text_spec));
+  text_spec.id = editor_id;
+  text_spec.box_index = box_index;
+  text_spec.root = UI0RootKind_Modal;
+  text_spec.flags = UI0TextArea_Wrap;
+  text_spec.text = state->note_draft;
+  text_spec.text_len = state->note_draft_length;
+  text_spec.placeholder = labels.note_placeholder.data;
+  text_spec.placeholder_len = labels.note_placeholder.size;
+  text_spec.frame_input = ctx->input->input->note_text;
+  ctx->text_areas.style.wrap_width = rv_max(
+    editor_rect.w - ctx->text_areas.style.padding_x * 2, 8);
+  text_result = ui0_text_area_edit(&ctx->text_areas,
+                                   &ctx->signals,
+                                   &ctx->input_layout,
+                                   text_spec,
+                                   &buffer,
+                                   &state->note_input);
+  if (text_result.edited)
   {
     state->note_dirty = 1;
     ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
   }
-  if (state->note_selection_key != selection->selection_key ||
-      state->note_source_revision != selection->revision)
+  if (!matching)
     ctx->frame->error_flags |= ReaderViewFrameError_StaleNoteRevision;
-  (void)rv_add_control(ctx, editor_id,
-                       ctx->modal_id, UI0ControlKind_TextArea,
-                       ReaderViewSemantic_TextArea, UI0RootKind_Modal,
-                       editor_rect, reader_view_note_draft(state),
-                       rv_text(0, 0), state->note_selection_key,
-                       1, 0, 0, 0, 0);
-  button_row = rv_rect(modal.x + RV_INSET,
-                       modal.y + modal.h - 48,
-                       modal.w - RV_INSET * 2,
-                       RV_CONTROL_HEIGHT);
-  if (rv_add_control(ctx, rv_id(503, state->note_selection_key),
-                     ctx->modal_id, UI0ControlKind_TextButton,
-                     ReaderViewSemantic_Button, UI0RootKind_Modal,
-                     rv_rect(button_row.x, button_row.y,
-                             button_row.w / 3 - 3, button_row.h),
-                     labels.save_note, rv_text(0, 0),
-                     state->note_selection_key,
-                     state->note_dirty &&
-                     state->note_selection_key == selection->selection_key &&
-                     state->note_source_revision == selection->revision,
-                     0, 0, 0, 0))
+  (void)rv_add_semantic(
+    ctx, editor_id, ctx->modal_id,
+    ReaderViewSemantic_TextArea,
+    rv_semantic_flags(ctx, editor_id,
+                      (text_result.state &
+                       UI0TextAreaState_BlockedByRoot) == 0,
+                      (text_result.state &
+                       UI0TextAreaState_BlockedByRoot) == 0,
+                      0, 0, 0),
+    editor_rect, labels.note_text, reader_view_note_draft(state),
+    state->note_selection_key, 0, 0, 0);
+  (void)rv_add_binding(ctx, editor_id, labels.note_placeholder,
+                       ReaderViewTextStyle_Default);
+  for (row_index = 0;
+       row_index < ctx->text_areas.row_record_count;
+       ++row_index)
   {
-    if (state->note_selection_key != selection->selection_key ||
-        state->note_source_revision != selection->revision)
-      ctx->frame->error_flags |= ReaderViewFrameError_StaleNoteRevision;
-    else
-      (void)rv_add_action(ctx, ReaderViewAction_SaveNote,
-                          state->note_selection_key, 0,
-                          ReaderViewSetting_FontFamily, ReaderViewRightRow_Note,
-                          ReaderViewRightFilter_All,
-                          state->note_source_revision,
-                          reader_view_note_draft(state));
+    const UI0TextAreaRowRecord *row =
+      ctx->text_areas.row_records + row_index;
+    UI0S32 start = rv_clamp(row->byte_start, 0, state->note_draft_length);
+    UI0S32 end = rv_clamp(row->byte_end, start, state->note_draft_length);
+    (void)rv_add_binding(
+      ctx, rv_id(RV_NOTE_TEXT_ROW_ID_BASE + (UI0U64)row_index,
+                 state->note_selection_key),
+      rv_text(state->note_draft + start, end - start),
+      ReaderViewTextStyle_Default);
   }
-  if (rv_add_control(ctx, rv_id(504, state->note_selection_key),
-                     ctx->modal_id, UI0ControlKind_TextButton,
-                     ReaderViewSemantic_Button, UI0RootKind_Modal,
-                     rv_rect(button_row.x + button_row.w / 3,
-                             button_row.y, button_row.w / 3 - 3,
-                             button_row.h),
-                     labels.cancel, rv_text(0, 0),
-                     state->note_selection_key, 1, 0, 0, 0, 0))
+
+  delete_invoked = 0;
+  if ((selection->flags & ReaderViewSelection_CanDeleteNote) != 0)
+  {
+    delete_invoked = rv_add_control(
+      ctx, delete_id, ctx->modal_id,
+      UI0ControlKind_TextButton, ReaderViewSemantic_Button,
+      UI0RootKind_Modal, delete_rect,
+      labels.delete_note, rv_text(0, 0), state->note_selection_key,
+      matching, 0, 0, 0, 1);
+    rv_set_control_visual_text(ctx, delete_id, labels.delete_value);
+  }
+  if (delete_invoked)
+    (void)rv_add_action(ctx, ReaderViewAction_DeleteNote,
+                        state->note_selection_key, 0,
+                        ReaderViewSetting_FontFamily, ReaderViewRightRow_Note,
+                        ReaderViewRightFilter_All,
+                        state->note_source_revision, rv_text(0, 0));
+
+  cancel_invoked = rv_add_control(
+    ctx, cancel_id, ctx->modal_id,
+    UI0ControlKind_TextButton, ReaderViewSemantic_Button,
+    UI0RootKind_Modal, cancel_rect,
+    labels.cancel_note, rv_text(0, 0), state->note_selection_key,
+    1, 0, 0, 0, 0);
+  rv_make_control_quiet(ctx, cancel_id);
+  rv_set_control_visual_text(ctx, cancel_id, cancel_visual);
+  if (cancel_invoked)
   {
     (void)rv_add_action(ctx, ReaderViewAction_CancelNote,
                         state->note_selection_key, 0,
@@ -5537,24 +5721,22 @@ rv_build_note_editor(RVBuildContext *ctx,
     state->note_dirty = 0;
     rv_close_popup_and_restore_focus(ctx);
   }
-  if (rv_add_control(ctx, rv_id(505, state->note_selection_key),
-                     ctx->modal_id, UI0ControlKind_TextButton,
-                     ReaderViewSemantic_Button, UI0RootKind_Modal,
-                     rv_rect(button_row.x + (button_row.w * 2) / 3,
-                             button_row.y,
-                             button_row.w - (button_row.w * 2) / 3,
-                             button_row.h),
-                     labels.delete_value, rv_text(0, 0),
-                     state->note_selection_key,
-                     state->note_selection_key == selection->selection_key &&
-                     state->note_source_revision == selection->revision &&
-                     (selection->flags & ReaderViewSelection_CanDeleteNote) != 0,
-                     0, 0, 0, 1))
-    (void)rv_add_action(ctx, ReaderViewAction_DeleteNote,
+
+  save_invoked = rv_add_control(
+    ctx, save_id, ctx->modal_id,
+    UI0ControlKind_TextButton, ReaderViewSemantic_Button,
+    UI0RootKind_Modal, save_rect,
+    labels.save_note, rv_text(0, 0), state->note_selection_key,
+    matching, 0, 0, 0, 0);
+  rv_make_control_primary(ctx, save_id);
+  rv_set_control_visual_text(ctx, save_id, labels.save);
+  if (save_invoked)
+    (void)rv_add_action(ctx, ReaderViewAction_SaveNote,
                         state->note_selection_key, 0,
                         ReaderViewSetting_FontFamily, ReaderViewRightRow_Note,
                         ReaderViewRightFilter_All,
-                        state->note_source_revision, rv_text(0, 0));
+                        state->note_source_revision,
+                        reader_view_note_draft(state));
 }
 
 static void
@@ -5845,13 +6027,13 @@ rv_popup_items(const ReaderViewBuildInput *input, UI0B32 focusable_only)
       UI0B32 matching = state->note_selection_key == selection->selection_key &&
         state->note_source_revision == selection->revision;
       rv_popup_item_append(&result, rv_id(502, state->note_selection_key));
-      if (!focusable_only || (state->note_dirty && matching))
-        rv_popup_item_append(&result, rv_id(503, state->note_selection_key));
+      if ((selection->flags & ReaderViewSelection_CanDeleteNote) != 0 &&
+          (!focusable_only || matching))
+        rv_popup_item_append(&result,
+                             rv_id(505, state->note_selection_key));
       rv_popup_item_append(&result, rv_id(504, state->note_selection_key));
-      if (!focusable_only ||
-          (matching &&
-           (selection->flags & ReaderViewSelection_CanDeleteNote) != 0))
-        rv_popup_item_append(&result, rv_id(505, state->note_selection_key));
+      if (!focusable_only || matching)
+        rv_popup_item_append(&result, rv_id(503, state->note_selection_key));
     } break;
 
     default:
@@ -6405,6 +6587,8 @@ rv_reconcile_popup_state(const ReaderViewBuildInput *input,
   {
     target = rv_first_popup_focus_id(input, &focusable);
     rv_state_rehome_focus(state, frame, target);
+    if (state->popup == ReaderViewPopup_NoteEditor && target != 0)
+      state->focus_visible = 1;
   }
   if (state->focus_id != old_focus)
     frame->change_flags |= ReaderViewFrameChange_FocusChanged;
@@ -6450,6 +6634,13 @@ rv_capture_state_snapshots(RVBuildContext *ctx,
       state->popup != ReaderViewPopup_None)
   {
     state->prior_popup_kind = built_popup;
+    if (built_popup == ReaderViewPopup_NoteEditor &&
+        state->prior_popup_item_count <
+          READER_VIEW_POPUP_ITEM_SNAPSHOT_CAP)
+    {
+      state->prior_popup_item_ids[state->prior_popup_item_count++] =
+        rv_id(502, state->note_selection_key);
+    }
     for (index = 0; index < ctx->control_count &&
          state->prior_popup_item_count <
            READER_VIEW_POPUP_ITEM_SNAPSHOT_CAP; ++index)
@@ -6733,6 +6924,21 @@ reader_view_build(const ReaderViewBuildInput *input,
                              READER_VIEW_TEXT_INPUT_CAP);
   ctx.text_inputs.frame_index = input->frame_index;
   ctx.text_inputs.style = ui0_text_input_style_from_resolved(input->theme);
+  ui0_text_area_context_init(&ctx.text_areas);
+  ui0_text_area_begin_frame(
+    &ctx.text_areas,
+    storage->text_area_records,
+    READER_VIEW_TEXT_AREA_CAP,
+    storage->note_text_area_row_records,
+    READER_VIEW_TEXT_AREA_ROW_CAP,
+    storage->note_text_area_selection_records,
+    READER_VIEW_TEXT_AREA_SELECTION_CAP,
+    storage->note_text_area_layout_rows,
+    READER_VIEW_TEXT_AREA_ROW_CAP);
+  ctx.text_areas.frame_index = input->frame_index;
+  ctx.text_areas.style = ui0_text_area_style_from_resolved(input->theme);
+  ctx.text_areas.style.measure =
+    ui0_text_input_fixed_measure(RV_NOTE_TEXT_ADVANCE);
   if (input->find_text_metrics.fallback_advance > 0)
   {
     ctx.text_inputs.style.measure.measure = rv_find_text_measure;
@@ -6780,7 +6986,7 @@ reader_view_build(const ReaderViewBuildInput *input,
   rv_reconcile_popup_state(input, out_frame);
   root_popup = input->state->popup;
   root_rect = root_popup == ReaderViewPopup_NoteEditor ?
-    rv_centered_rect(input->layout->bounds, RV_NOTE_WIDTH, RV_NOTE_HEIGHT) :
+    rv_note_editor_rect(input) :
     rv_popup_rect(input);
 
   ui0_signal_context_init(&ctx.signals);
@@ -6892,6 +7098,14 @@ reader_view_build(const ReaderViewBuildInput *input,
   }
   rv_capture_state_snapshots(&ctx, root_popup);
 
+  if (root_popup == ReaderViewPopup_RightRowActions &&
+      input->state->right_menu_key != 0)
+  {
+    UI0ControlRecord *owner = rv_control_record_for_id(
+      &ctx, rv_id(324, input->state->right_menu_key));
+    if (owner) owner->state |= UI0ControlState_Hovered;
+  }
+
   ui0_draw_context_init(&ctx.draw);
   ui0_draw_begin_frame(&ctx.draw, storage->draw_commands,
                        READER_VIEW_DRAW_COMMAND_CAP,
@@ -6947,11 +7161,43 @@ reader_view_build(const ReaderViewBuildInput *input,
                                icon->rect);
     }
   }
+  {
+    UI0S32 text_area_draw_start = ctx.draw.command_count;
+    (void)ui0_text_area_draw_records(&ctx.draw, &ctx.text_areas);
+    if (ctx.text_areas.record_count > 0 &&
+        input->state->popup == ReaderViewPopup_NoteEditor &&
+        input->state->note_draft_length > 0)
+    {
+      const UI0TextAreaRecord *record = ctx.text_areas.records;
+      UI0S32 text_area_draw_index;
+      for (text_area_draw_index = text_area_draw_start;
+           text_area_draw_index < ctx.draw.command_count;
+           ++text_area_draw_index)
+      {
+        UI0DrawCommand *command =
+          ctx.draw.commands + text_area_draw_index;
+        if (command->source_id == record->id &&
+            command->op == UI0DrawOp_Text &&
+            command->source_index >= record->row_start &&
+            command->source_index < record->row_start + record->row_count)
+        {
+          command->source_id = rv_id(
+            RV_NOTE_TEXT_ROW_ID_BASE + (UI0U64)command->source_index,
+            input->state->note_selection_key);
+        }
+      }
+    }
+  }
 
   if ((ctx.signals.error_flags & UI0SignalError_NoRecordCap) != 0 ||
       (ctx.sliders.error_flags & UI0SliderError_NoRecordCap) != 0 ||
       (ctx.scrolls.error_flags & UI0ScrollError_NoRecordCap) != 0 ||
       (ctx.text_inputs.error_flags & UI0TextInputError_NoRecordCap) != 0 ||
+      (ctx.text_areas.error_flags &
+       (UI0TextAreaError_RowCapExceeded |
+        UI0TextAreaError_NoRecordCap |
+        UI0TextAreaError_NoRowCap |
+        UI0TextAreaError_NoSelectionCap)) != 0 ||
       (ctx.sidenav_visuals.error_flags & UI0SidenavError_NoRecordCap) != 0 ||
       (ctx.draw.error_flags & UI0DrawError_NoCommandCap) != 0)
     out_frame->error_flags |= ReaderViewFrameError_RecordCap;
@@ -6959,6 +7205,9 @@ reader_view_build(const ReaderViewBuildInput *input,
       (ctx.sliders.error_flags & UI0SliderError_BadInput) != 0 ||
       (ctx.scrolls.error_flags & UI0ScrollError_BadInput) != 0 ||
       (ctx.text_inputs.error_flags & UI0TextInputError_BadInput) != 0 ||
+      (ctx.text_areas.error_flags &
+       (UI0TextAreaError_BadInput |
+        UI0TextAreaError_HistoryIncompatible)) != 0 ||
       (ctx.sidenav_visuals.error_flags & UI0SidenavError_BadInput) != 0 ||
       (ctx.draw.error_flags & UI0DrawError_BadInput) != 0)
     out_frame->error_flags |= ReaderViewFrameError_BadInput;

@@ -36,12 +36,14 @@ The bounded API highlights used by this slice are:
   `bookmark_count`, `highlight_count`, and `note_count` values;
 - `ReaderViewRightRow` appends caller-resolved `rail_color` after every prior
   row field;
-- `ReaderViewFrameStorage` appends four fixed filter-label buffers and a
-  66-record reference-panel Sidenav buffer, while retaining the earlier
-  64-record member and all subsequent offsets unchanged;
+- `ReaderViewFrameStorage` appends four fixed filter-label buffers, a
+  66-record reference-panel Sidenav buffer, and fixed caller-owned note-editor
+  TextArea row/selection/layout storage, while retaining the earlier 64-record
+  member and all subsequent offsets unchanged;
 - `ReaderViewLabels` appends localized panel labels for Contents, Find, and
-  the empty-field `Search in book` placeholder, plus the four filter-specific
-  Annotations empty states;
+  the empty-field `Search in book` placeholder, the four filter-specific
+  Annotations empty states, and the frozen note-editor title, field, placeholder,
+  Save, and native Cancel names;
 - `ReaderViewBuildInput` appends a values-only `ReaderViewFindTextMetrics`
   record containing at most 256 caller-measured codepoint advances and one
   caller-measured fallback advance;
@@ -123,14 +125,15 @@ The title begins at x 1156. The row's text begins at x 1091. A row with both
 metadata and primary copy uses the frozen centered 46 px stack: metadata is
 `(1091,142,221,20)` and primary text is `(1091,168,221,20)` for the first
 deterministic row. The star paints as a 14 by 14 icon at `(1323,154)` without a
-button shell. The row menu retains its standard 30 by 28 fill/border shell and
-centered literal ellipsis.
-Annotation rows use the elevated-surface fill only while hovered or active;
-idle, selected-only, and focus-only rows have neither fill nor border. Semantic
-selection/focus and the focus ring remain intact. Pointer hover over either
-the star or row-menu child keeps the parent row's frozen hover fill while the
-child retains activation ownership; the overlapping visual hover record does
-not turn a child click into row activation.
+button shell. Its raster background is the resolved Badge token, including the
+frozen pale-coral starred treatment. The row menu retains its standard 30 by 28
+fill/border shell and centered literal ellipsis. Annotation rows use the
+elevated-surface fill while hovered or active and while their own action menu is
+open; idle, selected-only, and focus-only rows have neither fill nor border.
+Semantic selection/focus and the focus ring remain intact. Pointer hover over
+either the star or row-menu child keeps the parent row's frozen hover fill while
+the child retains activation ownership; the overlapping visual hover record
+does not turn a child click into row activation.
 
 Available filter choices use the frozen visual order All, Highlights, Notes,
 and Bookmarks. With all four choices present, their 274 by 29 px rows begin at
@@ -139,7 +142,7 @@ labels are `All (1)`, `All Highlight Colors (0)`, `Notes (0)`, and
 `Bookmarks (1)` for the deterministic fixture. The selected All rail is
 `(1086,106,3,17)`. Option text uses the frozen ten-pixel horizontal padding;
 the first text rect is `(1106,100,254,29)`. The filter trigger retains its
-18 by 18 Select icon at `(1081,69)`. Escape is keyboard input, so it restores
+14 by 14 Select icon at `(1083,71)`. Escape is keyboard input, so it restores
 the trigger with visible focus; its clipped ring is the full
 `(1078,66,24,24)` trigger perimeter.
 
@@ -234,9 +237,10 @@ as the accepted reference. Each row's 30 by 28 menu target paints the centered
 literal `...` inside a clipped 22 by 28 text rectangle and retains the standard
 UI0 menu-trigger fill and border shell. It has no substituted icon; its
 accessible name is the distinct localized `Annotation actions` label. The star
-target remains shell-free. Row fill is emitted only for Hovered or Active and
-uses `UI0ColorRole_SurfaceElevated` for both states; selection-only and
-focus-only never synthesize a row band or border.
+target remains shell-free. Row fill is emitted for Hovered or Active and for
+the keyed owner while its action menu is open, using
+`UI0ColorRole_SurfaceElevated`; selection-only and focus-only never synthesize
+a row band or border.
 Partially visible row, text, star, and menu records are clipped to the content
 viewport's full width. A fully clipped star or menu trigger is not published as
 a control or semantic focus target.
@@ -329,6 +333,23 @@ one appended `ReaderViewAction_CancelNote` with the authoritative selection key
 and revision, allowing the host to clear its committed reader selection.
 Cancel revisions are normalized in deterministic action evidence just like
 Save/Delete revisions. A clean draft may still close through Escape.
+
+The frozen editing composition is an anchored 520 by 360 modal rather than a
+generic centered three-button form. In the accepted 1400 by 780 right-panel
+case, the modal is `(303,117,520,360)`, the real multiline UI0 TextArea is
+`(317,167,492,248)`, and Delete, Close, and Save are respectively
+`(317,431,74,30)`, `(675,431,62,30)`, and `(747,431,62,30)`. The title is
+`Note` for an existing note and `Add Note` for a new one. The field announces
+`Note text`, uses `Type a note` only as its visual placeholder, paints wrapped
+rows top-aligned with the frozen fixed eight-pixel UI0 layout advance, and
+retains bounded caret/selection/history behavior. Delete
+is destructive and appears only for a deletable existing note, Close/Cancel is
+quiet, and Save is primary and remains enabled for an unchanged matching
+revision. Native edit focus order is Note text, Delete note, Cancel note, Save
+note; visible edit copy remains Delete, Close, Save, while Add Note omits Delete
+and paints Cancel.
+Opening either composition moves visible focus into the TextArea, matching the
+frozen editor rather than leaving a pointer-opened modal without a focus cue.
 
 Save and Delete continue to return host-executed actions. A host calls
 `reader_view_close_note_editor` only after the corresponding persistence
