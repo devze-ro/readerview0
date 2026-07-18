@@ -121,13 +121,16 @@ The 320 px right panel is `(1068,56,320,686)`. Its accepted records are:
 
 The title begins at x 1156. The row's text begins at x 1091. A row with both
 metadata and primary copy uses the frozen centered 46 px stack: metadata is
-`(1091,144,221,20)` and primary text is `(1091,170,221,20)` for the first
+`(1091,142,221,20)` and primary text is `(1091,168,221,20)` for the first
 deterministic row. The star paints as a 14 by 14 icon at `(1323,154)` without a
 button shell. The row menu retains its standard 30 by 28 fill/border shell and
 centered literal ellipsis.
 Annotation rows use the elevated-surface fill only while hovered or active;
 idle, selected-only, and focus-only rows have neither fill nor border. Semantic
-selection/focus and the focus ring remain intact.
+selection/focus and the focus ring remain intact. Pointer hover over either
+the star or row-menu child keeps the parent row's frozen hover fill while the
+child retains activation ownership; the overlapping visual hover record does
+not turn a child click into row activation.
 
 Available filter choices use the frozen visual order All, Highlights, Notes,
 and Bookmarks. With all four choices present, their 274 by 29 px rows begin at
@@ -393,7 +396,8 @@ Strict MSVC C11 `/W4 /WX` validation covers:
 - exact shell-free left rail/dividers, outlined close, distinct TOC native
   semantic/focus and physical pointer/paint rows, Find semantic/pointer/paint
   input split, selected-result inset and per-row divider, annotation
-  header/centered text stack/star composition, 18 px filter icon, popup,
+  header/exact system-font-descent text stack/star composition, 18 px filter
+  icon, popup,
   ten-pixel filter-option text padding, and clipped Escape focus-ring geometry;
 - current-row focus, depth indentation, panel-open state, one-action TOC
   activation, native semantic-center routing, physical `(200,154)` routing to
@@ -410,8 +414,9 @@ Strict MSVC C11 `/W4 /WX` validation covers:
 - annotation row activation, four exact counted filter labels, selected rail,
   20 px scale-2 section labels within 26 px blocks, centered literal row-menu
   ellipses without a substituted icon and with the standard 30 by 28 shell,
-  shell-free stars, exact elevated-surface hover/active row fill with no
-  idle/selected-only/focus-only fill or row border, all three exact
+  shell-free stars, exact elevated-surface hover/active parent-row fill even
+  over star/menu children with no idle/selected-only/focus-only fill or row
+  border, all three exact
   kind-specific action matrices, anchored and bottom-flipped popup geometry,
   pointer/keyboard focus entry, native names, four exact filter-specific empty
   states, filter selection and Escape restoration, dynamic-membership closure,

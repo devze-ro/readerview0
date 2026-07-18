@@ -1905,7 +1905,7 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
                                         node->id) : 0;
   check(command != 0 &&
-        rect_equal(command->rect, ui0_rect(1091, 144, 221, 20)) &&
+        rect_equal(command->rect, ui0_rect(1091, 142, 221, 20)) &&
         command->color == theme->colors[UI0ColorRole_TextSecondary] &&
         command->has_typography_role &&
         command->typography_role == UI0TypographyRole_Metadata,
@@ -1915,9 +1915,59 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
                                         node->id) : 0;
   check(command != 0 &&
-        rect_equal(command->rect, ui0_rect(1091, 170, 221, 20)),
+        rect_equal(command->rect, ui0_rect(1091, 168, 221, 20)),
         "Annotations primary record restores the frozen centered 20px text "
         "stack");
+  memset(&frame_input, 0, sizeof(frame_input));
+  frame_input.ui = ui0_input_pointer(1330, 161, 0, 0, 0);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations star-child hover frame builds");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRow, 40);
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRowStar, 40);
+  control = node ? find_control_for_source(&storage, node->id) : 0;
+  fill = row ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                    row->id) : 0;
+  check(row != 0 && node != 0 && control != 0 && fill != 0 &&
+        (fill->flags & UI0DrawFlag_Hovered) != 0 &&
+        (control->state & UI0ControlState_Hovered) != 0 &&
+        (node->flags & ReaderViewSemantic_Focusable) != 0,
+        "Annotations row keeps its frozen parent hover fill over the star "
+        "while the star remains the bounded child target");
+  frame_input.ui = ui0_input_pointer(1330, 161, 1, 1, 0);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations overlapping star press frame builds");
+  frame_input.ui = ui0_input_pointer(1330, 161, 0, 0, 1);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations overlapping star release frame builds");
+  action = find_action(&frame, ReaderViewAction_ToggleRightRowStar);
+  check(action != 0 && action->key == 40 && frame.action_count == 1 &&
+        find_action(&frame, ReaderViewAction_ActivateRightRow) == 0,
+        "Annotations overlapping parent hover preserves star-only pointer "
+        "activation");
+  memset(&frame_input, 0, sizeof(frame_input));
+  frame_input.ui = ui0_input_pointer(1355, 161, 0, 0, 0);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations menu-child hover frame builds");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRow, 40);
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRowMenu, 40);
+  control = node ? find_control_for_source(&storage, node->id) : 0;
+  fill = row ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                    row->id) : 0;
+  check(row != 0 && node != 0 && control != 0 && fill != 0 &&
+        (fill->flags & UI0DrawFlag_Hovered) != 0 &&
+        (control->state & UI0ControlState_Hovered) != 0 &&
+        (node->flags & ReaderViewSemantic_Focusable) != 0,
+        "Annotations row keeps its frozen parent hover fill over the menu "
+        "while the menu remains the bounded child target");
+  memset(&frame_input, 0, sizeof(frame_input));
   right_rows[0].flags |= ReaderViewRow_Selected | ReaderViewRow_Starred;
   build_input.frame_index += 1;
   check(reader_view_build(&build_input, &storage, &frame),

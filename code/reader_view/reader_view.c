@@ -47,7 +47,7 @@ enum
   RV_RIGHT_FILTER_ICON_SIZE = 18,
   RV_RIGHT_TEXT_LINE_HEIGHT = 20,
   RV_RIGHT_TEXT_STACK_GAP = 6,
-  RV_RIGHT_TEXT_BASELINE_OFFSET = 6,
+  RV_RIGHT_TEXT_BASELINE_OFFSET = 4,
   RV_POPUP_WIDTH = 280,
   RV_NOTE_WIDTH = 512,
   RV_NOTE_HEIGHT = 360,
@@ -4841,10 +4841,7 @@ rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
                         30, 28);
     star_hit = ui0_rect_intersect(star_rect, content_clip);
     menu_hit = ui0_rect_intersect(menu_rect, content_clip);
-    main_hit = ui0_rect_intersect(
-      rv_rect(visual_row.x, visual_row.y,
-              rv_max(star_rect.x - visual_row.x, 1), visual_row.h),
-      content_clip);
+    main_hit = ui0_rect_intersect(visual_row, content_clip);
     visible_rect = ui0_rect_intersect(entry_rect, content_clip);
     primary_text_y = visual_row.y + (visual_row.h - primary_text_height) / 2;
     if (row->secondary.size > 0)
