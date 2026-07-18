@@ -129,6 +129,16 @@ test_find_text_width(const char *text)
 }
 
 static UI0S32
+test_find_text_range_width(ReaderViewText text)
+{
+  UI0S32 result = 0;
+  UI0S32 index;
+  for (index = 0; index < text.size; ++index)
+    result += test_find_codepoint_advance((unsigned char)text.data[index]);
+  return result;
+}
+
+static UI0S32
 test_note_codepoint_advance(UI0U32 codepoint)
 {
   if (codepoint == (UI0U32)' ') return 5;
@@ -5578,6 +5588,134 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
   }
 }
 
+static void
+test_find_excerpt_visible_match_window(const UI0ResolvedTheme *theme)
+{
+  static const char long_excerpt[] =
+    "IMPERIAL COMMAND Ganoes Stabro Paran, a noble-born officer in the "
+    "Malazan Empire";
+  static const char utf8_excerpt[] =
+    "A very long caf\xc3\xa9 preface before Paran tail context";
+  static ReaderViewState state;
+  static ReaderViewFrameStorage storage;
+  ReaderViewSettingControl settings[READER_VIEW_SETTING_CAP];
+  ReaderViewChoice choices[8];
+  ReaderViewTocRow toc_rows[2];
+  ReaderViewFindRow find_rows[1];
+  ReaderViewRightRow right_rows[1];
+  ReaderViewCodepointAdvance advances[127];
+  ReaderViewProjection projection = full_projection(
+    settings, choices, toc_rows, find_rows, right_rows);
+  ReaderViewLayoutInput layout_input;
+  ReaderViewLayout layout;
+  ReaderViewInput input;
+  ReaderViewBuildInput build_input;
+  ReaderViewFrame frame;
+  const ReaderViewSemanticNode *row;
+  const ReaderViewTextBinding *binding = 0;
+  const UI0DrawCommand *draw = 0;
+  const char *match;
+  UI0S32 index;
+
+  match = strstr(long_excerpt, "Paran");
+  check(match != 0, "long Find fixture contains its match");
+  find_rows[0].excerpt.data = long_excerpt;
+  find_rows[0].excerpt.size = (UI0S32)strlen(long_excerpt);
+  find_rows[0].match_start = match ? (UI0U32)(match - long_excerpt) : 0;
+  find_rows[0].match_size = 5;
+  projection.find.active_index = 0;
+  projection.find.status.message.data = "1 match";
+  projection.find.status.message.size = 7;
+
+  reader_view_state_reset_document(&state, projection.document_key);
+  state.left_panel = ReaderViewLeftPanel_Find;
+  memset(&layout_input, 0, sizeof(layout_input));
+  layout_input.bounds = ui0_rect(0, 0, 1400, 780);
+  layout_input.features = projection.features;
+  layout_input.document_flags = projection.document_flags;
+  layout_input.host_toolbar_trailing_width = 38;
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "long Find excerpt layout resolves");
+  memset(&input, 0, sizeof(input));
+  memset(&build_input, 0, sizeof(build_input));
+  build_input.frame_index = 7000;
+  build_input.state = &state;
+  build_input.layout = &layout;
+  build_input.projection = &projection;
+  build_input.input = &input;
+  build_input.theme = theme;
+  build_input.find_text_metrics = test_find_text_metrics(advances);
+  check(reader_view_build(&build_input, &storage, &frame),
+        "long Find excerpt frame builds");
+
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindRow, find_rows[0].key);
+  for (index = 0; row && index < frame.semantic_node_count; ++index)
+  {
+    const ReaderViewSemanticNode *candidate = frame.semantic_nodes + index;
+    const ReaderViewTextBinding *candidate_binding;
+    if (candidate->parent_id != row->id) continue;
+    candidate_binding = find_text_binding(&frame, candidate->id);
+    if (candidate_binding && candidate_binding->match_size > 0)
+    {
+      binding = candidate_binding;
+      draw = find_draw_for_source(&frame, UI0DrawOp_Text, candidate->id);
+      break;
+    }
+  }
+  check(row != 0 && text_equal(row->name, long_excerpt),
+        "Find row retains the complete Reader0 excerpt as its semantic name");
+  check(binding != 0 && binding->text.data > long_excerpt &&
+        binding->text.size < (UI0S32)strlen(long_excerpt) &&
+        binding->text.size >= 7 &&
+        memcmp(binding->text.data, "COMMAND", 7) == 0,
+        "long-prefix Find result publishes a bounded natural-word window");
+  check(binding != 0 && binding->match_size == 5 &&
+        binding->match_start + binding->match_size <=
+          (UI0U32)binding->text.size &&
+        memcmp(binding->text.data + binding->match_start, "Paran", 5) == 0,
+        "visible Find excerpt remaps and retains the complete match bytes");
+  check(binding != 0 && draw != 0 &&
+        test_find_text_range_width(binding->text) <= draw->rect.w,
+        "visible Find excerpt fits the caller-measured one-line width");
+
+  match = strstr(utf8_excerpt, "Paran");
+  find_rows[0].excerpt.data = utf8_excerpt;
+  find_rows[0].excerpt.size = (UI0S32)strlen(utf8_excerpt);
+  find_rows[0].match_start = match ? (UI0U32)(match - utf8_excerpt) : 0;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "UTF-8 long-prefix Find excerpt frame builds");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindRow, find_rows[0].key);
+  binding = 0;
+  for (index = 0; row && index < frame.semantic_node_count; ++index)
+  {
+    const ReaderViewSemanticNode *candidate = frame.semantic_nodes + index;
+    const ReaderViewTextBinding *candidate_binding;
+    if (candidate->parent_id != row->id) continue;
+    candidate_binding = find_text_binding(&frame, candidate->id);
+    if (candidate_binding && candidate_binding->match_size > 0)
+    {
+      binding = candidate_binding;
+      break;
+    }
+  }
+  check(binding != 0 &&
+        (((unsigned char)binding->text.data[0] & 0xc0u) != 0x80u) &&
+        binding->match_start + binding->match_size <=
+          (UI0U32)binding->text.size &&
+        memcmp(binding->text.data + binding->match_start, "Paran", 5) == 0,
+        "Find excerpt window preserves UTF-8 and match boundaries");
+
+  find_rows[0].match_start = (UI0U32)find_rows[0].excerpt.size - 1;
+  find_rows[0].match_size = 2;
+  build_input.frame_index += 1;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_InvalidMatch) != 0,
+        "Find excerpt window retains strict invalid-range rejection");
+}
+
 int
 main(void)
 {
@@ -5637,6 +5775,7 @@ main(void)
   test_note_metric_contract(&theme);
   test_note_reference_rows_and_hits(&theme);
   test_modal_feature_and_scroll_lifecycle(&theme);
+  test_find_excerpt_visible_match_window(&theme);
 
   geometry_style = reader_view_default_content_geometry_style();
   memset(&geometry, 0, sizeof(geometry));

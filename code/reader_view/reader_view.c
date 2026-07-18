@@ -140,6 +140,14 @@ typedef struct RVBuildContext
 } RVBuildContext;
 
 static ReaderViewText
+rv_find_visible_excerpt(ReaderViewText excerpt,
+                        UI0U32 match_start,
+                        UI0U32 match_size,
+                        const ReaderViewFindTextMetrics *metrics,
+                        UI0S32 max_width,
+                        UI0U32 *out_match_start);
+
+static ReaderViewText
 rv_text(const char *data, UI0S32 size)
 {
   ReaderViewText result;
@@ -4310,6 +4318,8 @@ rv_build_find_panel(RVBuildContext *ctx,
   for (index = 0; index < find->row_count; ++index)
   {
     const ReaderViewFindRow *row = find->rows + index;
+    ReaderViewText visible_excerpt;
+    UI0U32 visible_match_start;
     UI0Rect row_rect = rv_rect(list_rect.x,
                                list_rect.y +
                                  index * RV_NAV_FIND_ROW_HEIGHT - scroll_y,
@@ -4324,6 +4334,10 @@ rv_build_find_panel(RVBuildContext *ctx,
     UI0ID row_id = rv_id(227, row->key);
     UI0S32 control_index = ctx->control_count;
     if (hit_rect.w <= 0 || hit_rect.h <= 0) continue;
+    visible_excerpt = rv_find_visible_excerpt(
+      row->excerpt, row->match_start, row->match_size,
+      &ctx->input->find_text_metrics, excerpt_rect.w,
+      &visible_match_start);
     if (rv_add_control_with_hit_rect(
           ctx, row_id, ctx->left_panel_id,
           UI0ControlKind_SidenavRow,
@@ -4377,7 +4391,7 @@ rv_build_find_panel(RVBuildContext *ctx,
       }
     }
     rv_add_text_record(ctx, rv_id(230, row->key), row_id,
-                       excerpt_rect, row->excerpt,
+                       excerpt_rect, visible_excerpt,
                        ReaderViewSemantic_Group,
                        ReaderViewSemantic_Enabled, row->key);
     {
@@ -4388,7 +4402,7 @@ rv_build_find_panel(RVBuildContext *ctx,
           excerpt_record->clip_rect, content_clip);
     }
     rv_set_text_binding_match(ctx, rv_id(230, row->key),
-                              row->match_start, row->match_size);
+                              visible_match_start, row->match_size);
   }
 }
 
@@ -7085,6 +7099,128 @@ rv_find_text_measure(void *user_data,
       0x7fffffff : current_width + advance;
   }
   return rv_max(max_width, current_width);
+}
+
+static UI0B32
+rv_find_text_byte_boundary(ReaderViewText text, UI0U32 byte_index)
+{
+  unsigned char byte;
+  if (byte_index == 0 || byte_index == (UI0U32)text.size) return 1;
+  if (byte_index > (UI0U32)text.size || !text.data) return 0;
+  byte = (unsigned char)text.data[byte_index];
+  return (byte & 0xc0u) != 0x80u;
+}
+
+static UI0U32
+rv_find_text_fit_end(ReaderViewText text,
+                     UI0U32 start,
+                     const ReaderViewFindTextMetrics *metrics,
+                     UI0S32 max_width)
+{
+  UI0U32 at = start;
+  UI0U32 best = start;
+  UI0S32 width = 0;
+  if (!text.data || start >= (UI0U32)text.size || max_width <= 0)
+    return start;
+  while (at < (UI0U32)text.size)
+  {
+    UI0S32 codepoint_size;
+    UI0U32 codepoint = rv_find_text_codepoint(
+      text.data, text.size, (UI0S32)at, &codepoint_size);
+    UI0S32 advance;
+    if (codepoint_size <= 0) break;
+    if (codepoint == (UI0U32)'\r' || codepoint == (UI0U32)'\n') break;
+    advance = rv_find_codepoint_advance(metrics, codepoint);
+    if (advance > max_width - width) break;
+    width += advance;
+    at += (UI0U32)codepoint_size;
+    best = at;
+  }
+  return best;
+}
+
+static UI0U32
+rv_find_host_first_line_end(ReaderViewText text,
+                            const ReaderViewFindTextMetrics *metrics,
+                            UI0S32 max_width)
+{
+  UI0U32 best = rv_find_text_fit_end(text, 0, metrics, max_width);
+  UI0U32 last_space = 0;
+  UI0U32 at;
+  if (best >= (UI0U32)text.size) return best;
+  for (at = 0; at < best; ++at)
+    if (text.data[at] == ' ') last_space = at;
+  return last_space > 0 ? last_space : best;
+}
+
+static ReaderViewText
+rv_find_visible_excerpt(ReaderViewText excerpt,
+                        UI0U32 match_start,
+                        UI0U32 match_size,
+                        const ReaderViewFindTextMetrics *metrics,
+                        UI0S32 max_width,
+                        UI0U32 *out_match_start)
+{
+  UI0U32 match_end = match_start + match_size;
+  UI0U32 start = 0;
+  UI0U32 end;
+  UI0U32 candidate;
+  UI0B32 found = 0;
+  if (out_match_start) *out_match_start = match_start;
+  if (!out_match_start || !excerpt.data || excerpt.size <= 0 ||
+      !metrics || max_width <= 0 || match_size == 0 ||
+      match_start > (UI0U32)excerpt.size ||
+      match_size > (UI0U32)excerpt.size - match_start ||
+      !rv_find_text_byte_boundary(excerpt, match_start) ||
+      !rv_find_text_byte_boundary(excerpt, match_end))
+  {
+    return excerpt;
+  }
+  if (match_end <= rv_find_host_first_line_end(excerpt, metrics, max_width))
+    return excerpt;
+
+  candidate = 0;
+  for (;;)
+  {
+    if (candidate <= match_start &&
+        rv_find_text_measure((void *)(const void *)metrics,
+                             excerpt.data + candidate,
+                             (UI0S32)(match_end - candidate)) <= max_width)
+    {
+      start = candidate;
+      found = 1;
+      break;
+    }
+    while (candidate < match_start && excerpt.data[candidate] != ' ')
+      candidate += 1;
+    while (candidate < match_start && excerpt.data[candidate] == ' ')
+      candidate += 1;
+    if (candidate >= match_start) break;
+  }
+  if (!found &&
+      rv_find_text_measure((void *)(const void *)metrics,
+                           excerpt.data + match_start,
+                           (UI0S32)match_size) <= max_width)
+  {
+    start = match_start;
+    found = 1;
+  }
+  if (!found || !rv_find_text_byte_boundary(excerpt, start)) return excerpt;
+
+  end = rv_find_text_fit_end(excerpt, start, metrics, max_width);
+  if (end < match_end) return excerpt;
+  if (end < (UI0U32)excerpt.size)
+  {
+    UI0U32 last_space = 0;
+    UI0U32 at;
+    for (at = match_end; at < end; ++at)
+      if (excerpt.data[at] == ' ') last_space = at;
+    end = last_space > match_end ? last_space : match_end;
+  }
+  while (end > match_end && excerpt.data[end - 1] == ' ') end -= 1;
+  if (!rv_find_text_byte_boundary(excerpt, end)) end = match_end;
+  *out_match_start = match_start - start;
+  return rv_text(excerpt.data + start, (UI0S32)(end - start));
 }
 
 static UI0S32

@@ -193,10 +193,15 @@ its explicit message, shared bounded query state selects the localized
 `Type and press Enter` or `No matches` fallback; no generic centered
 empty-surface message is synthesized.
 
-Find result excerpts are host-rendered. Their text bindings carry only the
-projected match range; each host measures and paints the range with its actual
-system-UI metrics and the resolved reader-highlight color. Readerview0 owns no
-font or glyph measurement and never substitutes a fixed character width.
+Find result excerpts are host-rendered. The parent result row retains the full
+projected excerpt as its semantic name. When that excerpt's first fitted line
+would omit a valid displayable match, Readerview0 uses only the caller-supplied
+bounded per-codepoint advances to select a natural-word, one-line borrowed
+slice containing the match and remaps the binding's byte range into that
+slice. If the first line already contains the match, the original full binding
+is preserved. Each host still owns the actual system-UI font, glyph
+measurement, rasterization, and resolved reader-highlight paint. Readerview0
+owns no font or glyph object and never substitutes a fixed character width.
 
 The accepted right panel owns only Annotations chrome: filter/export/close,
 section and row composition, star/menu controls, counted filter-label

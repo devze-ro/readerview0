@@ -61,9 +61,11 @@ typedef struct ReaderViewText
 
 /*
  * Concrete font measurement remains host-owned. The host supplies bounded
- * per-codepoint advances from the same system-UI face used to paint Find text;
- * readerview0 consumes only these portable values and exposes no caller
- * executable indirection or provider boundary. Missing codepoints use the
+ * per-codepoint advances from the same system-UI face used to paint Find text.
+ * Readerview0 uses only these portable values for Find-input geometry and to
+ * select a bounded one-line result excerpt that includes its valid match; the
+ * host still owns glyph measurement and rasterization. No caller executable
+ * indirection or provider boundary is exposed. Missing codepoints use the
  * caller-measured fallback advance.
  */
 typedef struct ReaderViewCodepointAdvance

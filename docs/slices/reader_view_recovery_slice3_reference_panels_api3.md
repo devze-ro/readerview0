@@ -233,12 +233,17 @@ centered Empty record or leaks the generic `Nothing here` copy into the Find
 panel.
 
 Each result has one 88 px shared row. Its section label is muted and
-right-aligned, and its full excerpt remains the primary host-rendered text.
-`ReaderViewTextBinding` appends `match_start` and `match_size`, copied from the
-validated `ReaderViewFindRow`. The host measures the prefix and match using its
-actual frozen system-UI font metrics, paints the shared reader-highlight color,
-then paints the unchanged excerpt. Readerview0 does not guess character widths,
-own a font, or rasterize the highlight.
+right-aligned, and its parent semantic row retains the full projected excerpt.
+`ReaderViewTextBinding` appends `match_start` and `match_size`, derived from the
+validated `ReaderViewFindRow`. A later real-book recovery slice clarified this
+binding contract: if the first fitted line would omit a valid displayable
+match, Readerview0 uses the existing caller-supplied bounded per-codepoint
+advances to borrow a natural-word, one-line slice that contains the match and
+remaps the byte range into that slice. An already-visible match preserves the
+unchanged full binding. The host still owns the actual frozen system-UI font,
+glyph measurement, highlight rasterization, and text paint. Readerview0 does
+not guess character widths, own a font or glyph object, or rasterize the
+highlight.
 
 Activating a result emits exactly one `ReaderViewAction_ActivateFindRow`, keeps
 Find open, moves portable focus from the input to the row without a visible
@@ -463,8 +468,10 @@ Strict MSVC C11 `/W4 /WX` validation covers:
   field clip and non-Find caret isolation,
   physical clear-button precedence/focus restoration, single ready status,
   exact prompt/zero-match fallback copy and geometry, muted
-  right-aligned section metadata, exact borrowed match range, one-action result
-  activation, and absence of query-change actions;
+  right-aligned section metadata, exact borrowed match range, full semantic
+  excerpt retention, caller-measured one-line match inclusion with remapped
+  byte ranges and UTF-8-safe boundaries, one-action result activation, and
+  absence of query-change actions;
 - annotation row activation, four exact counted filter labels, selected rail,
   20 px scale-2 section labels within 26 px blocks, centered literal row-menu
   ellipses without a substituted icon and with the standard 30 by 28 shell,
