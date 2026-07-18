@@ -5676,8 +5676,10 @@ test_find_excerpt_visible_match_window(const UI0ResolvedTheme *theme)
         memcmp(binding->text.data + binding->match_start, "Paran", 5) == 0,
         "visible Find excerpt remaps and retains the complete match bytes");
   check(binding != 0 && draw != 0 &&
-        test_find_text_range_width(binding->text) <= draw->rect.w,
-        "visible Find excerpt fits the caller-measured one-line width");
+        test_find_text_range_width(binding->text) <=
+          draw->rect.w - build_input.find_text_metrics.fallback_advance,
+        "visible Find excerpt fits with one caller-measured advance reserved "
+        "against host full-string fit differences");
 
   match = strstr(utf8_excerpt, "Paran");
   find_rows[0].excerpt.data = utf8_excerpt;

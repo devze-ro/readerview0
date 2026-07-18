@@ -199,7 +199,10 @@ would omit a valid displayable match, Readerview0 uses only the caller-supplied
 bounded per-codepoint advances to select a natural-word, one-line borrowed
 slice containing the match and remaps the binding's byte range into that
 slice. If the first line already contains the match, the original full binding
-is preserved. Each host still owns the actual system-UI font, glyph
+is preserved. A recovered slice reserves one caller-measured fallback advance
+against small scalar-sum/full-string fit differences, preventing the host's
+word fit from rewinding to the word before the match. Each host still owns the
+actual system-UI font, glyph
 measurement, rasterization, and resolved reader-highlight paint. Readerview0
 owns no font or glyph object and never substitutes a fixed character width.
 

@@ -7166,6 +7166,8 @@ rv_find_visible_excerpt(ReaderViewText excerpt,
   UI0U32 end;
   UI0U32 candidate;
   UI0B32 found = 0;
+  UI0S32 window_width;
+  UI0S32 match_width;
   if (out_match_start) *out_match_start = match_start;
   if (!out_match_start || !excerpt.data || excerpt.size <= 0 ||
       !metrics || max_width <= 0 || match_size == 0 ||
@@ -7179,13 +7181,27 @@ rv_find_visible_excerpt(ReaderViewText excerpt,
   if (match_end <= rv_find_host_first_line_end(excerpt, metrics, max_width))
     return excerpt;
 
+  match_width = rv_find_text_measure((void *)(const void *)metrics,
+                                     excerpt.data + match_start,
+                                     (UI0S32)match_size);
+  window_width = max_width;
+  if (metrics->fallback_advance > 0 &&
+      max_width > metrics->fallback_advance &&
+      match_width <= max_width - metrics->fallback_advance)
+  {
+    /* A host's full-string fit can differ slightly from the sum of its
+       portable scalar advances. Reserve one measured fallback advance so a
+       recovered line cannot be rewound to the word before the match. */
+    window_width = max_width - metrics->fallback_advance;
+  }
+
   candidate = 0;
   for (;;)
   {
     if (candidate <= match_start &&
         rv_find_text_measure((void *)(const void *)metrics,
                              excerpt.data + candidate,
-                             (UI0S32)(match_end - candidate)) <= max_width)
+                             (UI0S32)(match_end - candidate)) <= window_width)
     {
       start = candidate;
       found = 1;
@@ -7200,14 +7216,14 @@ rv_find_visible_excerpt(ReaderViewText excerpt,
   if (!found &&
       rv_find_text_measure((void *)(const void *)metrics,
                            excerpt.data + match_start,
-                           (UI0S32)match_size) <= max_width)
+                           (UI0S32)match_size) <= window_width)
   {
     start = match_start;
     found = 1;
   }
   if (!found || !rv_find_text_byte_boundary(excerpt, start)) return excerpt;
 
-  end = rv_find_text_fit_end(excerpt, start, metrics, max_width);
+  end = rv_find_text_fit_end(excerpt, start, metrics, window_width);
   if (end < match_end) return excerpt;
   if (end < (UI0U32)excerpt.size)
   {

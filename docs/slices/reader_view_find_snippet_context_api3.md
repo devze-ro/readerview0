@@ -44,6 +44,8 @@ when the original first fitted line would omit a valid displayable match. It:
 - advances only to a UTF-8-safe natural word boundary before the match;
 - retains the complete match whenever its measured width fits the row;
 - bounds the borrowed slice to the available one-line width;
+- reserves one caller-measured fallback advance in a recovery window so small
+  scalar-sum/full-string fit differences cannot rewind before the match;
 - remaps `match_start` into the borrowed slice while retaining `match_size`;
   and
 - rejects invalid source ranges through the existing fail-closed projection
