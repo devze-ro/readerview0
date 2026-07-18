@@ -23,6 +23,15 @@ rect_equal(UI0Rect a, UI0Rect b)
   return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
 }
 
+static int
+rect_within(UI0Rect inner, UI0Rect outer)
+{
+  return inner.w >= 0 && inner.h >= 0 &&
+         inner.x >= outer.x && inner.y >= outer.y &&
+         inner.x + inner.w <= outer.x + outer.w &&
+         inner.y + inner.h <= outer.y + outer.h;
+}
+
 static ReaderViewSurfaceStatus
 ready_status(void)
 {
@@ -90,6 +99,81 @@ find_action(const ReaderViewFrame *frame, ReaderViewActionKind kind)
 }
 
 static UI0S32
+test_find_codepoint_advance(UI0U32 codepoint)
+{
+  if (codepoint == (UI0U32)'v') return 5;
+  if (codepoint == (UI0U32)'w') return 11;
+  if (codepoint == (UI0U32)'y') return 6;
+  if (codepoint == (UI0U32)'g') return 7;
+  return 8;
+}
+
+static ReaderViewFindTextMetrics
+test_find_text_metrics(ReaderViewCodepointAdvance *advances)
+{
+  ReaderViewFindTextMetrics result;
+  UI0S32 index;
+  for (index = 1; index < 128; ++index)
+  {
+    advances[index - 1].codepoint = (UI0U32)index;
+    advances[index - 1].advance =
+      test_find_codepoint_advance((UI0U32)index);
+  }
+  result.advances = advances;
+  result.advance_count = 127;
+  result.fallback_advance = 8;
+  return result;
+}
+
+static UI0S32
+test_find_text_width(const char *text)
+{
+  UI0S32 result = 0;
+  while (text && *text)
+  {
+    result += test_find_codepoint_advance((unsigned char)*text);
+    text += 1;
+  }
+  return result;
+}
+
+static const ReaderViewSemanticNode *
+find_semantic_control_source(const ReaderViewFrame *frame,
+                             ReaderViewSemanticControl control,
+                             ReaderViewKey source_key)
+{
+  UI0S32 index;
+  for (index = 0; index < frame->semantic_node_count; ++index)
+  {
+    const ReaderViewSemanticNode *node = frame->semantic_nodes + index;
+    if (node->control == control && node->source_key == source_key)
+      return node;
+  }
+  return 0;
+}
+
+static const ReaderViewSemanticNode *
+find_semantic_id(const ReaderViewFrame *frame, UI0ID id)
+{
+  UI0S32 index;
+  for (index = 0; index < frame->semantic_node_count; ++index)
+    if (frame->semantic_nodes[index].id == id)
+      return frame->semantic_nodes + index;
+  return 0;
+}
+
+static const UI0SidenavRecord *
+find_reference_sidenav_record(const ReaderViewFrameStorage *storage,
+                              UI0ID id)
+{
+  UI0S32 index;
+  for (index = 0; index < READER_VIEW_REFERENCE_SIDENAV_RECORD_CAP; ++index)
+    if (storage->reference_sidenav_records[index].id == id)
+      return storage->reference_sidenav_records + index;
+  return 0;
+}
+
+static UI0S32
 count_draw_op_for_source(const ReaderViewFrame *frame,
                          UI0DrawOpKind op,
                          UI0ID source_id)
@@ -131,6 +215,32 @@ find_draw_for_source(const ReaderViewFrame *frame,
   return 0;
 }
 
+static UI0S32
+find_draw_index_for_source(const ReaderViewFrame *frame,
+                           UI0DrawOpKind op,
+                           UI0ID source_id)
+{
+  UI0S32 index;
+  for (index = 0; index < frame->draw_command_count; ++index)
+    if (frame->draw_commands[index].op == op &&
+        frame->draw_commands[index].source_id == source_id)
+      return index;
+  return -1;
+}
+
+static const UI0DrawCommand *
+find_draw_for_rect(const ReaderViewFrame *frame,
+                   UI0DrawOpKind op,
+                   UI0Rect rect)
+{
+  UI0S32 index;
+  for (index = 0; index < frame->draw_command_count; ++index)
+    if (frame->draw_commands[index].op == op &&
+        rect_equal(frame->draw_commands[index].rect, rect))
+      return frame->draw_commands + index;
+  return 0;
+}
+
 static const UI0ControlRecord *
 find_control_for_source(const ReaderViewFrameStorage *storage, UI0ID source_id)
 {
@@ -138,6 +248,22 @@ find_control_for_source(const ReaderViewFrameStorage *storage, UI0ID source_id)
   for (index = 0; index < READER_VIEW_CONTROL_CAP; ++index)
     if (storage->control_records[index].id == source_id)
       return storage->control_records + index;
+  return 0;
+}
+
+static const UI0ScrollRecord *
+find_scroll_record_on_side(const ReaderViewFrameStorage *storage,
+                           UI0S32 split_x,
+                           UI0B32 right_side)
+{
+  UI0S32 index;
+  for (index = 0; index < READER_VIEW_SCROLL_CAP; ++index)
+  {
+    const UI0ScrollRecord *record = storage->scroll_records + index;
+    if (record->id != 0 &&
+        ((record->track_rect.x >= split_x) != 0) == (right_side != 0))
+      return record;
+  }
   return 0;
 }
 
@@ -158,6 +284,16 @@ count_semantic(const ReaderViewFrame *frame, const char *name)
   UI0S32 result = 0;
   for (index = 0; index < frame->semantic_node_count; ++index)
     if (text_equal(frame->semantic_nodes[index].name, name)) result += 1;
+  return result;
+}
+
+static UI0S32
+count_semantic_role(const ReaderViewFrame *frame, ReaderViewSemanticRole role)
+{
+  UI0S32 index;
+  UI0S32 result = 0;
+  for (index = 0; index < frame->semantic_node_count; ++index)
+    if (frame->semantic_nodes[index].role == role) result += 1;
   return result;
 }
 
@@ -437,6 +573,10 @@ test_zero_document_interaction(const UI0ResolvedTheme *theme)
   build_input.projection = &projection;
   build_input.input = &frame_input;
   build_input.theme = theme;
+  check(build_input.find_text_metrics.advances == 0 &&
+        build_input.find_text_metrics.advance_count == 0 &&
+        build_input.find_text_metrics.fallback_advance == 0,
+        "Open-only frames require no Find metric record");
   check(reader_view_build(&build_input, &storage, &frame),
         "zero-document seed build");
   open = find_semantic(&frame, "Open");
@@ -479,6 +619,29 @@ test_zero_document_interaction(const UI0ResolvedTheme *theme)
     check(open && (open->flags & ReaderViewSemantic_Focused) != 0 &&
           state.focus_id == open_id,
           "zero-document frame preserves focus state");
+
+    state.hot_id = open_id;
+    state.active_id = open_id;
+    state.pending_accessibility_focus_id = open_id;
+    state.pending_accessibility_invoke_id = open_id;
+    projection.features = 0;
+    layout_input.features = projection.features;
+    check(reader_view_resolve_layout(&state, &layout_input, &layout),
+          "zero-document Open-withdrawal layout resolves");
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame) &&
+          state.focus_id == 0 && !state.focus_visible &&
+          state.hot_id == 0 && state.active_id == 0 &&
+          state.pending_accessibility_focus_id == 0 &&
+          state.pending_accessibility_invoke_id == 0 &&
+          find_semantic_control_source(
+            &frame, ReaderViewSemanticControl_Open, 0) == 0 &&
+          frame.action_count == 0,
+          "withdrawing Open clears every retained interaction identity");
+    projection.features = ReaderViewFeature_Open;
+    layout_input.features = projection.features;
+    check(reader_view_resolve_layout(&state, &layout_input, &layout),
+          "zero-document restored-Open layout resolves");
   }
 
   state.left_panel = ReaderViewLeftPanel_Find;
@@ -678,6 +841,3512 @@ test_progress_u64_scaling(const UI0ResolvedTheme *theme)
         "INT32 boundary progress keeps one-location first step");
 }
 
+static void
+test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
+{
+  static ReaderViewState state;
+  static ReaderViewFrameStorage storage;
+  ReaderViewLayoutInput layout_input;
+  ReaderViewLayout layout;
+  ReaderViewSettingControl settings[READER_VIEW_SETTING_CAP];
+  ReaderViewChoice setting_choices[8];
+  ReaderViewTocRow toc_rows[2];
+  ReaderViewFindRow find_rows[1];
+  ReaderViewRightRow right_rows[2];
+  ReaderViewCodepointAdvance find_advances[127];
+  ReaderViewProjection projection = full_projection(
+    settings, setting_choices, toc_rows, find_rows, right_rows);
+  ReaderViewInput frame_input;
+  ReaderViewBuildInput build_input;
+  ReaderViewFrame frame;
+  const ReaderViewSemanticNode *node;
+  const ReaderViewSemanticNode *row;
+  const ReaderViewSemanticNode *filter;
+  const ReaderViewSemanticNode *option;
+  const ReaderViewSemanticNode *clear_control;
+  const ReaderViewTextBinding *binding;
+  const UI0DrawCommand *command;
+  const UI0DrawCommand *fill;
+  const UI0DrawCommand *border;
+  const UI0DrawCommand *icon;
+  const UI0DrawCommand *indicator;
+  const UI0TextInputRecord *input_record;
+  const ReaderViewAction *action;
+  UI0Rect rect;
+  UI0ID previous_id;
+  UI0ID toc_id;
+  UI0ID find_input_id;
+  UI0ID find_id;
+  UI0ID right_id;
+  UI0ID right_close_id;
+  UI0ID right_menu_id;
+  UI0S32 index;
+
+  projection.find.status.message.data = "1 match";
+  projection.find.status.message.size = 7;
+  projection.right.available_filters = ReaderViewRightFilterFlag_All |
+                                       ReaderViewRightFilterFlag_Bookmarks |
+                                       ReaderViewRightFilterFlag_Highlights |
+                                       ReaderViewRightFilterFlag_Notes;
+  projection.right.all_count = 1;
+  projection.right.bookmark_count = 1;
+  projection.right.highlight_count = 0;
+  projection.right.note_count = 0;
+  projection.labels.highlights.data = "All Highlight Colors";
+  projection.labels.highlights.size = 20;
+  right_rows[0].secondary.data = "Bookmark - re10 loc 1";
+  right_rows[0].secondary.size =
+    (UI0S32)strlen(right_rows[0].secondary.data);
+  toc_rows[1].depth = 2;
+
+  reader_view_state_reset_document(&state, projection.document_key);
+  memset(&layout_input, 0, sizeof(layout_input));
+  layout_input.bounds = ui0_rect(0, 0, 1400, 780);
+  layout_input.features = projection.features;
+  layout_input.document_flags = projection.document_flags;
+  layout_input.host_toolbar_trailing_width = 38;
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "panel recovery base layout resolves");
+  memset(&frame_input, 0, sizeof(frame_input));
+  memset(&build_input, 0, sizeof(build_input));
+  build_input.frame_index = 1000;
+  build_input.state = &state;
+  build_input.layout = &layout;
+  build_input.projection = &projection;
+  build_input.input = &frame_input;
+  build_input.theme = theme;
+  build_input.find_text_metrics = test_find_text_metrics(find_advances);
+  {
+    ReaderViewFindTextMetrics valid_metrics = build_input.find_text_metrics;
+    memset(&build_input.find_text_metrics, 0,
+           sizeof(build_input.find_text_metrics));
+    check(!reader_view_build(&build_input, &storage, &frame) &&
+          (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+          "Find feature fails closed without caller text metrics");
+    build_input.find_text_metrics = valid_metrics;
+
+    find_advances[1].codepoint = find_advances[0].codepoint;
+    check(!reader_view_build(&build_input, &storage, &frame) &&
+          (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+          "Find metrics reject duplicate codepoints");
+    find_advances[1].codepoint = 2;
+
+    find_advances[0].advance = -1;
+    check(!reader_view_build(&build_input, &storage, &frame) &&
+          (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+          "Find metrics reject negative advances");
+    find_advances[0].advance = test_find_codepoint_advance(1);
+
+    find_advances[0].advance = 0x100001;
+    check(!reader_view_build(&build_input, &storage, &frame) &&
+          (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+          "Find metrics reject oversized advances");
+    find_advances[0].advance = test_find_codepoint_advance(1);
+  }
+  check(reader_view_build(&build_input, &storage, &frame),
+        "panel recovery base frame builds");
+
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_Contents, 0);
+  check(node != 0, "panel recovery Contents toolbar control exists");
+  if (node)
+  {
+    rect = node->rect;
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       1, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "panel recovery Contents press builds");
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       0, 0, 1);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "panel recovery Contents release builds");
+  }
+  check(state.left_panel == ReaderViewLeftPanel_Contents,
+        "Contents toolbar opens accepted left panel");
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "Contents accepted layout resolves");
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Contents accepted frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_LeftPanelClose, 0);
+  check(node != 0 && rect_equal(node->rect, ui0_rect(398, 66, 24, 24)) &&
+        text_equal(node->name, "Close navigation"),
+        "Contents close uses the frozen target and native name");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_LeftContentsTab, 0);
+  binding = node ? find_text_binding(&frame, node->id) : 0;
+  check(node != 0 && rect_equal(node->rect, ui0_rect(20, 68, 56, 34)) &&
+        text_equal(node->name, "Contents") && binding != 0 &&
+        text_equal(binding->text, "TOC"),
+        "Contents rail keeps the frozen native name and short visual copy");
+  fill = node ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                     node->id) : 0;
+  indicator = node ? find_draw_for_source(&frame, UI0DrawOp_IndicatorFill,
+                                          node->id) : 0;
+  command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                        node->id) : 0;
+  check(fill != 0 && rect_equal(fill->rect, ui0_rect(27, 68, 49, 34)) &&
+        indicator != 0 &&
+        rect_equal(indicator->rect, ui0_rect(20, 75, 3, 20)) &&
+        indicator->color == theme->colors[UI0ColorRole_Focus] &&
+        command != 0 && command->rect.x == 36,
+        "Contents rail paints the frozen Sidenav body, rail, and text inset");
+  node = find_semantic_role(&frame, "Table of Contents",
+                            ReaderViewSemantic_Panel);
+  check(node != 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                 node ? node->id : 0) == 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlBorder,
+                                 node ? node->id : 0) == 0,
+        "Contents omits the post-extraction rounded left-panel shell");
+  node = find_semantic_role(&frame, "Table of Contents",
+                            ReaderViewSemantic_Group);
+  command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                        node->id) : 0;
+  check(command != 0 &&
+        rect_equal(command->rect, ui0_rect(104, 68, 284, 24)) &&
+        command->has_typography_role &&
+        command->typography_role == UI0TypographyRole_SectionTitle,
+        "Contents title uses the frozen placement and section-title token");
+  command = find_draw_for_rect(&frame, UI0DrawOp_ControlFill,
+                               ui0_rect(83, 68, 1, 662));
+  check(command != 0 &&
+        command->color == theme->colors[UI0ColorRole_BorderMuted] &&
+        command->stroke_color == command->color,
+        "Contents rail divider is the frozen inset one-pixel rule");
+  command = find_draw_for_rect(&frame, UI0DrawOp_ControlFill,
+                               ui0_rect(431, 56, 1, 686));
+  check(command != 0 &&
+        command->color == theme->colors[UI0ColorRole_BorderMuted] &&
+        command->stroke_color == command->color,
+        "Contents keeps the frozen outer one-pixel divider");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_LeftPanelClose, 0);
+  fill = node ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                     node->id) : 0;
+  border = node ? find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
+                                       node->id) : 0;
+  icon = node ? find_icon_for_source(&frame, node->id) : 0;
+  check(fill != 0 && border != 0 && icon != 0 &&
+        icon->stroke_color == fill->color,
+        "Contents close restores the outlined shell and exact icon background");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_TocRow, 20);
+  check(row != 0 && rect_equal(row->rect, ui0_rect(104, 108, 308, 32)) &&
+        (row->flags & (ReaderViewSemantic_Focused |
+                       ReaderViewSemantic_Current)) ==
+          (ReaderViewSemantic_Focused | ReaderViewSemantic_Current) &&
+        state.focus_id == row->id && !state.focus_visible,
+        "Contents current row auto-focuses with frozen native geometry");
+  fill = row ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                    row->id) : 0;
+  indicator = row ? find_draw_for_source(&frame, UI0DrawOp_IndicatorFill,
+                                         row->id) : 0;
+  command = row ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                       row->id) : 0;
+  icon = row ? find_icon_for_source(&frame, row->id) : 0;
+  check(fill != 0 &&
+        rect_equal(fill->rect, ui0_rect(114, 104, 298, 32)) &&
+        indicator != 0 &&
+        rect_equal(indicator->rect, ui0_rect(104, 111, 3, 18)) &&
+        indicator->color == theme->colors[UI0ColorRole_Focus] &&
+        command != 0 && command->rect.x == 142 &&
+        icon != 0 && icon->icon_kind == UI0IconKind_ChevronDown &&
+        rect_equal(icon->rect, ui0_rect(124, 114, 12, 12)),
+        "Contents current entry paints the frozen compact row composition");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_TocRow, 21);
+  check(row != 0 && rect_equal(row->rect, ui0_rect(104, 140, 308, 32)),
+        "Contents depth preserves the full-width native semantic row");
+  command = row ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                       row->id) : 0;
+  check(command != 0 && command->rect.x == 182 && command->rect.y == 138 &&
+        command->rect.h == 32,
+        "Contents depth indents only frozen expander/text visual geometry");
+  frame_input.ui = ui0_input_pointer(200, 154, 1, 1, 0);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Contents frozen second-visual-row coordinate press builds");
+  frame_input.ui = ui0_input_pointer(200, 154, 0, 0, 1);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Contents frozen second-visual-row coordinate release builds");
+  action = find_action(&frame, ReaderViewAction_ActivateTocRow);
+  check(action != 0 && action->key == 21 && frame.action_count == 1 &&
+        state.active_toc_key == 21,
+        "Contents full-app (200,154) activates visual row 1, never row 0");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_TocRow, 21);
+  if (row)
+  {
+    rect = row->rect;
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       1, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Contents second native semantic-center press builds");
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       0, 0, 1);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Contents second native semantic-center release builds");
+  }
+  action = find_action(&frame, ReaderViewAction_ActivateTocRow);
+  check(action != 0 && action->key == 21 && frame.action_count == 1,
+        "Contents second native semantic center hits its matching visual row");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_TocRow, 20);
+  toc_id = row ? row->id : 0;
+  if (row)
+  {
+    rect = row->rect;
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       1, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Contents current row press builds");
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       0, 0, 1);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Contents current row release builds");
+  }
+  action = find_action(&frame, ReaderViewAction_ActivateTocRow);
+  check(action != 0 && action->key == 20 && frame.action_count == 1 &&
+        state.left_panel == ReaderViewLeftPanel_Contents &&
+        state.active_toc_key == 20 && state.focus_id == toc_id &&
+        !state.focus_visible,
+        "Contents native semantic center routes to its matching physical row "
+        "and keeps panel/focus state");
+
+  {
+    ReaderViewTocRow long_toc_rows[32];
+    UI0S32 row_text_index;
+    UI0S32 scroll_thumb_index;
+    memset(long_toc_rows, 0, sizeof(long_toc_rows));
+    for (index = 0; index < 32; ++index)
+    {
+      long_toc_rows[index].key = (ReaderViewKey)(1000 + index);
+      long_toc_rows[index].label.data = "Long chapter";
+      long_toc_rows[index].label.size = 12;
+      long_toc_rows[index].flags = ReaderViewRow_Enabled;
+    }
+    state.active_toc_key = 0;
+    state.focus_id = 0;
+    state.focus_visible = 0;
+    projection.toc.rows = long_toc_rows;
+    projection.toc.row_count = 32;
+    projection.toc.total_count = 32;
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "long Contents scroll-layer frame builds");
+    row = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_TocRow, 1000);
+    row_text_index = row ? find_draw_index_for_source(
+      &frame, UI0DrawOp_Text, row->id) : -1;
+    scroll_thumb_index = find_draw_index_for_source(
+      &frame, UI0DrawOp_ScrollThumb, storage.scroll_records[0].id);
+    check(row_text_index >= 0 && scroll_thumb_index > row_text_index,
+          "Contents scroll thumb draws above Sidenav rows and below popups");
+  }
+
+  projection.toc.rows = 0;
+  projection.toc.row_count = 0;
+  projection.toc.total_count = 0;
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Contents ready-empty frame builds");
+  node = find_semantic_role(&frame, "No contents",
+                            ReaderViewSemantic_Status);
+  command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                        node->id) : 0;
+  check(node != 0 && command != 0 &&
+        rect_equal(node->rect, ui0_rect(104, 112, 308, 22)) &&
+        rect_equal(command->rect, ui0_rect(104, 112, 308, 22)) &&
+        rect_equal(command->clip_rect, ui0_rect(104, 112, 308, 22)) &&
+        command->color == theme->colors[UI0ColorRole_TextMuted] &&
+        command->has_text_alignment &&
+        command->text_align_x == UI0TextAlignX_Start &&
+        command->text_align_y == UI0TextAlignY_Center &&
+        command->has_typography_role &&
+        command->typography_role == UI0TypographyRole_Body &&
+        command->typography_char_width == 8 &&
+        command->typography_line_height == 16 &&
+        count_semantic(&frame, "Nothing here") == 0,
+        "Contents ready-empty copy uses the exact frozen rect and muted "
+        "body style without the generic fallback");
+  projection.labels.no_contents.data = "Localized no contents";
+  projection.labels.no_contents.size = 21;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame) &&
+        find_semantic_role(&frame, "Localized no contents",
+                           ReaderViewSemantic_Status) != 0,
+        "Contents ready-empty copy remains caller-localizable");
+  projection.labels.no_contents.data = 0;
+  projection.labels.no_contents.size = 0;
+  projection.toc.rows = toc_rows;
+  projection.toc.row_count = 2;
+  projection.toc.total_count = 2;
+
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_LeftFindTab, 0);
+  check(node != 0, "Find rail tab exists");
+  if (node)
+  {
+    rect = node->rect;
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       1, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Find rail press builds");
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       0, 0, 1);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Find rail release builds");
+  }
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index = 1050;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find accepted frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindInput, 0);
+  find_input_id = node ? node->id : 0;
+  input_record = storage.text_input_records;
+  check(node != 0 && rect_equal(node->rect, ui0_rect(104, 104, 308, 34)) &&
+        text_equal(node->name, "Search input") && node->value.size == 0 &&
+        state.focus_id == node->id && !state.focus_visible,
+        "Find opens with accepted input geometry, stable AT name/current "
+        "value, and invisible input focus");
+  check(input_record->id == find_input_id &&
+        input_record->box_index == 0 &&
+        rect_equal(input_record->rect, ui0_rect(104, 104, 274, 34)) &&
+        rect_equal(input_record->clip_rect,
+                   ui0_rect(104, 104, 274, 34)) &&
+        rect_equal(input_record->text_rect,
+                   ui0_rect(112, 113, 258, 16)) &&
+        (input_record->state & UI0TextInputState_Focused) != 0 &&
+        (input_record->state &
+         UI0TextInputState_PlaceholderVisible) != 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                 find_input_id) == 1 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlBorder,
+                                 find_input_id) == 1 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_TextCaret,
+                                 find_input_id) == 1,
+        "Find uses one real focused UI0 text-input record at the exact "
+        "274px frozen field");
+  binding = node ? find_text_binding(&frame, node->id) : 0;
+  command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                        node->id) : 0;
+  check(binding != 0 && text_equal(binding->text, "Search in book") &&
+        command != 0 &&
+        command->label_hash == input_record->placeholder_hash &&
+        rect_equal(command->rect, ui0_rect(112, 104, 112, 34)) &&
+        rect_equal(input_record->caret_rect,
+                   ui0_rect(112, 113, 1, 16)),
+        "Find focused empty input paints the frozen Search in book text and "
+        "caret together");
+  build_input.frame_index = 1051;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find first hidden caret frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindInput, 0);
+  input_record = storage.text_input_records;
+  check(node != 0 &&
+        (input_record->state & UI0TextInputState_Focused) != 0 &&
+        (input_record->state &
+         UI0TextInputState_PlaceholderVisible) != 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_Text,
+                                 node->id) == 1 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_TextCaret,
+                                 node->id) == 0,
+        "Find caret switches off exactly between visible frame 1050 and "
+        "hidden frame 1051 without hiding the placeholder");
+
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_LeftPanelClose, 0);
+  check(node != 0 && reader_view_accessibility_focus(&state, node->id),
+        "Find can move focus away for placeholder coverage");
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find unfocused placeholder frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindInput, 0);
+  input_record = storage.text_input_records;
+  binding = node ? find_text_binding(&frame, node->id) : 0;
+  command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                        node->id) : 0;
+  check(node != 0 && input_record->id == node->id &&
+        (input_record->state &
+         UI0TextInputState_PlaceholderVisible) != 0 &&
+        (input_record->state & UI0TextInputState_Focused) == 0 &&
+        binding != 0 && text_equal(binding->text, "Search in book") &&
+        command != 0 &&
+        command->label_hash == input_record->placeholder_hash &&
+        rect_equal(command->rect, ui0_rect(112, 104, 112, 34)) &&
+        rect_equal(command->clip_rect, ui0_rect(112, 104, 258, 34)) &&
+        count_draw_op_for_source(&frame, UI0DrawOp_TextCaret,
+                                 node->id) == 0,
+        "Find empty unfocused field draws the distinct frozen Search in "
+        "book placeholder from the UI0 record");
+  projection.labels.find_placeholder.data = "Localized search";
+  projection.labels.find_placeholder.size = 16;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find localized placeholder frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindInput, 0);
+  binding = node ? find_text_binding(&frame, node->id) : 0;
+  check(binding != 0 && text_equal(binding->text, "Localized search"),
+        "Find placeholder remains caller-localizable independently of "
+        "ready status");
+  projection.labels.find_placeholder.data = 0;
+  projection.labels.find_placeholder.size = 0;
+  check(node != 0 && reader_view_accessibility_focus(&state, node->id),
+        "Find input accepts bounded accessibility refocus");
+  build_input.frame_index = 1080;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find input refocus frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindInput, 0);
+  input_record = storage.text_input_records;
+  check(node != 0 &&
+        (input_record->state & UI0TextInputState_Focused) != 0 &&
+        (input_record->state &
+         UI0TextInputState_PlaceholderVisible) != 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_Text,
+                                 node->id) == 1 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_TextCaret,
+                                 node->id) == 0,
+        "Find frame 1080 keeps focused placeholder visible while the exact "
+        "30-frame caret blink is hidden");
+  memcpy(state.find_query, "alpha", 5);
+  state.find_query[5] = 0;
+  state.find_query_length = 5;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find current-query semantic frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindInput, 0);
+  binding = node ? find_text_binding(&frame, node->id) : 0;
+  check(node != 0 && text_equal(node->name, "Search input") &&
+        text_equal(node->value, "alpha") && binding != 0 &&
+        text_equal(binding->text, "alpha"),
+        "Find SearchBox keeps a stable name while current query is both "
+        "semantic value and visual binding");
+  fill = node ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                     node->id) : 0;
+  border = node ? find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
+                                       node->id) : 0;
+  check(fill != 0 && border != 0 &&
+        rect_equal(fill->rect, ui0_rect(104, 104, 274, 34)) &&
+        rect_equal(border->rect, ui0_rect(104, 104, 274, 34)),
+        "Find preserves the 308px semantic input while painting the frozen "
+        "274px field");
+  input_record = storage.text_input_records;
+  command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                        node->id) : 0;
+  check(input_record->id == find_input_id &&
+        input_record->text_len == 5 && input_record->caret == 0 &&
+        input_record->selection_start == 0 &&
+        input_record->selection_end == 0 &&
+        command != 0 &&
+        rect_equal(command->rect, ui0_rect(112, 104, 40, 34)) &&
+        rect_equal(command->clip_rect, ui0_rect(112, 104, 258, 34)),
+        "Find current query is drawn from the bounded UI0 input record");
+  memset(&frame_input, 0, sizeof(frame_input));
+  frame_input.find_text.select_all = 1;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find focused selection frame builds");
+  input_record = storage.text_input_records;
+  check((input_record->state & UI0TextInputState_Focused) != 0 &&
+        (input_record->state & UI0TextInputState_HasSelection) != 0 &&
+        input_record->caret == 5 &&
+        input_record->selection_start == 0 &&
+        input_record->selection_end == 5 &&
+        rect_equal(input_record->selection_rect,
+                   ui0_rect(112, 113, 40, 16)) &&
+        rect_equal(input_record->caret_rect,
+                   ui0_rect(152, 113, 1, 16)) &&
+        count_draw_op_for_source(&frame, UI0DrawOp_TextSelection,
+                                 find_input_id) == 1 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_TextCaret,
+                                 find_input_id) == 1 &&
+        find_action(&frame, ReaderViewAction_FindChanged) == 0,
+        "Find focused UI0 record publishes exact selection and blinking "
+        "caret geometry without a false edit action");
+  frame_input.find_text.select_all = 0;
+  frame_input.ui = ui0_input_pointer(129, 121, 1, 1, 0);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find pointer caret press frame builds");
+  input_record = storage.text_input_records;
+  check(state.find_input.caret == 2 &&
+        state.find_input.selection_anchor == 2 &&
+        input_record->caret == 2 &&
+        input_record->selection_start == 2 &&
+        input_record->selection_end == 2 &&
+        (input_record->state & UI0TextInputState_Pressed) != 0 &&
+        (input_record->state & UI0TextInputState_HasSelection) == 0 &&
+        rect_equal(input_record->caret_rect,
+                   ui0_rect(128, 113, 1, 16)),
+        "Find pointer hit uses UI0 measurement to place and collapse the "
+        "caret inside the 274px field");
+  frame_input.ui = ui0_input_pointer(129, 121, 0, 0, 1);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find pointer caret release frame builds");
+  memset(&frame_input, 0, sizeof(frame_input));
+  {
+    const char *metric_query = "very high tower gyp";
+    UI0S32 metric_len = (UI0S32)strlen(metric_query);
+    UI0S32 metric_width = test_find_text_width(metric_query);
+    memcpy(state.find_query, metric_query, (size_t)metric_len + 1);
+    state.find_query_length = metric_len;
+    state.find_input.caret = metric_len;
+    state.find_input.selection_anchor = metric_len;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Find variable-width system-metric frame builds");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_FindInput, 0);
+    input_record = storage.text_input_records;
+    command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                           node->id) : 0;
+    check(metric_width != metric_len * 8 &&
+          input_record->full_text_width == metric_width &&
+          input_record->text_draw_rect.w == metric_width &&
+          input_record->caret == metric_len &&
+          rect_equal(input_record->caret_rect,
+                     ui0_rect(input_record->text_rect.x + metric_width,
+                              input_record->text_rect.y, 1,
+                              input_record->text_rect.h)) &&
+          command != 0 && command->rect.w == metric_width,
+          "Find caret and draw geometry use caller-supplied variable-width "
+          "system-UI advances instead of len times eight");
+  }
+  {
+    const char missing_metric_query[] = "\xc3\xa9";
+    memcpy(state.find_query, missing_metric_query,
+           sizeof(missing_metric_query));
+    state.find_query_length = 2;
+    state.find_input.caret = 2;
+    state.find_input.selection_anchor = 2;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Find missing-codepoint fallback frame builds");
+    input_record = storage.text_input_records;
+    check(input_record->full_text_width ==
+            build_input.find_text_metrics.fallback_advance &&
+          rect_equal(input_record->caret_rect,
+                     ui0_rect(input_record->text_rect.x +
+                                build_input.find_text_metrics.fallback_advance,
+                              input_record->text_rect.y, 1,
+                              input_record->text_rect.h)),
+          "Find missing scalar deterministically uses the caller-measured "
+          "fallback advance");
+  }
+  node = find_semantic_role(&frame, "Search", ReaderViewSemantic_Group);
+  command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                        node->id) : 0;
+  check(command != 0 &&
+        rect_equal(command->rect, ui0_rect(104, 68, 284, 24)) &&
+        command->has_typography_role &&
+        command->typography_role == UI0TypographyRole_SectionTitle,
+        "Find title uses the frozen left-panel title composition");
+  clear_control = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindClear, 0);
+  fill = clear_control ?
+    find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                         clear_control->id) : 0;
+  border = clear_control ?
+    find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
+                         clear_control->id) : 0;
+  icon = clear_control ? find_icon_for_source(&frame, clear_control->id) : 0;
+  check(clear_control != 0 &&
+        rect_equal(clear_control->rect, ui0_rect(382, 109, 24, 24)) &&
+        text_equal(clear_control->name, "Clear search") &&
+        fill != 0 && border != 0 && icon != 0 &&
+        icon->stroke_color == fill->color,
+        "Find clear restores the separate frozen outlined 24px button");
+  if (clear_control)
+  {
+    rect = clear_control->rect;
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       1, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Find physical clear press builds");
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       0, 0, 1);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Find physical clear release builds");
+  }
+  action = find_action(&frame, ReaderViewAction_FindChanged);
+  input_record = storage.text_input_records;
+  binding = find_input_id ? find_text_binding(&frame, find_input_id) : 0;
+  check(state.find_query_length == 0 && action != 0 &&
+        frame.action_count == 1 && state.focus_id == find_input_id &&
+        !state.focus_visible &&
+        (input_record->state & UI0TextInputState_Focused) != 0 &&
+        (input_record->state &
+         UI0TextInputState_PlaceholderVisible) != 0 &&
+        binding != 0 && text_equal(binding->text, "Search in book") &&
+        count_draw_op_for_source(&frame, UI0DrawOp_Text,
+                                 find_input_id) == 1 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_TextCaret,
+                                 find_input_id) == 1,
+        "Find clear physical target wins its non-overlapping hit row and "
+        "restores frozen focused Search in book plus caret");
+  memcpy(state.find_query, "alpha", 5);
+  state.find_query[5] = 0;
+  state.find_query_length = 5;
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find query restores for accessibility clear coverage");
+  clear_control = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindClear, 0);
+  check(clear_control != 0 &&
+        reader_view_accessibility_focus(&state, clear_control->id) &&
+        reader_view_accessibility_invoke(&state, clear_control->id),
+        "Find clear accepts bounded accessibility focus/invoke");
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find accessibility clear frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindInput, 0);
+  input_record = storage.text_input_records;
+  check(state.find_query_length == 0 && node != 0 &&
+        state.focus_id == node->id && state.focus_visible &&
+        node->value.size == 0 &&
+        (input_record->state & UI0TextInputState_Focused) != 0 &&
+        (input_record->state &
+         UI0TextInputState_PlaceholderVisible) != 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_Text,
+                                 node->id) == 1 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_TextCaret,
+                                 node->id) == 1,
+        "Find accessibility clear restores visible input focus and current "
+        "empty placeholder/caret state");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindRow, 30);
+  check(row != 0 && rect_equal(row->rect, ui0_rect(104, 172, 308, 88)),
+        "Find result uses frozen 88px row geometry");
+  projection.find.active_index = 0;
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find selected-result visual frame builds");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindRow, 30);
+  fill = row ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                    row->id) : 0;
+  check(fill != 0 &&
+        rect_equal(fill->rect, ui0_rect(104, 176, 308, 80)),
+        "Find selected result paints the frozen vertically inset fill");
+  projection.find.active_index = -1;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find selected-result visual state restores");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindRow, 30);
+  node = find_semantic_role(&frame, "1 match", ReaderViewSemantic_Status);
+  command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                        node->id) : 0;
+  check(count_semantic(&frame, "1 match") == 1 &&
+        node != 0 && command != 0 &&
+        rect_equal(node->rect, ui0_rect(104, 146, 308, 18)) &&
+        rect_equal(command->rect, ui0_rect(104, 146, 308, 18)) &&
+        rect_equal(command->clip_rect, ui0_rect(104, 146, 308, 18)) &&
+        command->color == theme->colors[UI0ColorRole_TextMuted] &&
+        command->has_text_alignment &&
+        command->text_align_x == UI0TextAlignX_Start &&
+        command->text_align_y == UI0TextAlignY_Center &&
+        command->has_typography_role &&
+        command->typography_role == UI0TypographyRole_Body &&
+        command->typography_char_width == 8 &&
+        command->typography_line_height == 16,
+        "Find ready status is emitted once at the frozen muted-body rect");
+  binding = 0;
+  command = 0;
+  for (index = 0; index < frame.semantic_node_count; ++index)
+  {
+    const ReaderViewSemanticNode *candidate = frame.semantic_nodes + index;
+    if (row && candidate->parent_id == row->id &&
+        candidate->role == ReaderViewSemantic_Group &&
+        text_equal(candidate->name, "One"))
+    {
+      command = find_draw_for_source(&frame, UI0DrawOp_Text, candidate->id);
+      check(command != 0 && command->has_text_alignment &&
+            command->text_align_x == UI0TextAlignX_End &&
+            command->color == theme->colors[UI0ColorRole_TextMuted],
+            "Find section is muted and right-aligned exactly");
+    }
+    if (row && candidate->parent_id == row->id &&
+        candidate->role == ReaderViewSemantic_Group &&
+        text_equal(candidate->name, "A result"))
+      binding = find_text_binding(&frame, candidate->id);
+  }
+  check(binding != 0 && binding->match_start == 2 &&
+        binding->match_size == 6,
+        "Find excerpt publishes the exact host-measured match range");
+  find_id = row ? row->id : 0;
+  if (row)
+  {
+    rect = row->rect;
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       1, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Find result press builds");
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       0, 0, 1);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Find result release builds");
+  }
+  action = find_action(&frame, ReaderViewAction_ActivateFindRow);
+  check(action != 0 && action->key == 30 && frame.action_count == 1 &&
+        state.left_panel == ReaderViewLeftPanel_Find &&
+        state.active_find_key == 30 && state.focus_id == find_id &&
+        !state.focus_visible &&
+        find_action(&frame, ReaderViewAction_FindChanged) == 0 &&
+        find_action(&frame, ReaderViewAction_FindCommitted) == 0,
+        "Find result invokes once without rebuilding query or closing panel");
+
+  projection.find.rows = 0;
+  projection.find.row_count = 0;
+  projection.find.total_count = 0;
+  projection.find.status.message.data = 0;
+  projection.find.status.message.size = 0;
+  memcpy(state.find_query, "alpha", 5);
+  state.find_query[5] = 0;
+  state.find_query_length = 5;
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find ready zero-result frame builds");
+  node = find_semantic_role(&frame, "No matches",
+                            ReaderViewSemantic_Status);
+  command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                        node->id) : 0;
+  check(node != 0 && command != 0 &&
+        rect_equal(node->rect, ui0_rect(104, 146, 308, 18)) &&
+        rect_equal(command->rect, ui0_rect(104, 146, 308, 18)) &&
+        rect_equal(command->clip_rect, ui0_rect(104, 146, 308, 18)) &&
+        command->color == theme->colors[UI0ColorRole_TextMuted] &&
+        command->has_text_alignment &&
+        command->text_align_x == UI0TextAlignX_Start &&
+        command->text_align_y == UI0TextAlignY_Center &&
+        command->has_typography_role &&
+        command->typography_role == UI0TypographyRole_Body &&
+        command->typography_char_width == 8 &&
+        command->typography_line_height == 16 &&
+        count_semantic(&frame, "Nothing here") == 0,
+        "Find ready zero-result copy uses exact frozen copy/geometry without "
+        "a generic fallback");
+  state.find_query[0] = 0;
+  state.find_query_length = 0;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Find ready empty-query frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindInput, 0);
+  binding = node ? find_text_binding(&frame, node->id) : 0;
+  check(find_semantic_role(&frame, "Type and press Enter",
+                           ReaderViewSemantic_Status) != 0 &&
+        node != 0 && binding != 0 &&
+        text_equal(binding->text, "Search in book") &&
+        !text_equal(binding->text, "Type and press Enter"),
+        "Find ready empty-query prompt preserves the frozen copy");
+  projection.labels.no_matches.data = "Localized no matches";
+  projection.labels.no_matches.size = 20;
+  memcpy(state.find_query, "alpha", 5);
+  state.find_query[5] = 0;
+  state.find_query_length = 5;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame) &&
+        find_semantic_role(&frame, "Localized no matches",
+                           ReaderViewSemantic_Status) != 0,
+        "Find ready zero-result copy remains caller-localizable");
+  projection.labels.no_matches.data = 0;
+  projection.labels.no_matches.size = 0;
+  projection.find.rows = find_rows;
+  projection.find.row_count = 1;
+  projection.find.total_count = 1;
+  projection.find.status.message.data = "1 match";
+  projection.find.status.message.size = 7;
+
+  projection.find.status.state = ReaderViewLoad_Loading;
+  projection.find.status.message.data = "Loading search";
+  projection.find.status.message.size = 14;
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame) &&
+        count_semantic(&frame, "Loading search") == 1,
+        "Find non-ready status is emitted exactly once");
+  projection.find.status.state = ReaderViewLoad_Ready;
+  projection.find.status.message.data = "1 match";
+  projection.find.status.message.size = 7;
+
+  state.left_panel = ReaderViewLeftPanel_None;
+  state.right_panel_open = 1;
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "Annotations accepted layout resolves");
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations accepted frame builds");
+  filter = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilter,
+    ReaderViewRightFilter_All);
+  check(filter != 0 && rect_equal(filter->rect, ui0_rect(1078, 66, 24, 24)) &&
+        text_equal(filter->name, "Filter annotations"),
+        "Annotations filter trigger uses the frozen target and native name");
+  fill = filter ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                       filter->id) : 0;
+  border = filter ? find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
+                                         filter->id) : 0;
+  icon = filter ? find_icon_for_source(&frame, filter->id) : 0;
+  check(fill != 0 && border != 0 && icon != 0 &&
+        icon->stroke_color == fill->color,
+        "Annotations filter restores its frozen outlined icon shell");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightExport, 0);
+  check(node != 0 && rect_equal(node->rect, ui0_rect(1112, 66, 24, 24)) &&
+        text_equal(node->name, "Export annotations"),
+        "Annotations export uses the frozen target and native name");
+  fill = node ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                     node->id) : 0;
+  border = node ? find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
+                                       node->id) : 0;
+  icon = node ? find_icon_for_source(&frame, node->id) : 0;
+  check(fill != 0 && border != 0 && icon != 0 &&
+        icon->stroke_color == fill->color,
+        "Annotations export restores its frozen outlined icon shell");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightPanelClose, 0);
+  check(node != 0 && rect_equal(node->rect, ui0_rect(1354, 66, 24, 24)) &&
+        text_equal(node->name, "Close annotations"),
+        "Annotations close uses the frozen target and native name");
+  right_close_id = node ? node->id : 0;
+  fill = node ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                     node->id) : 0;
+  border = node ? find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
+                                       node->id) : 0;
+  icon = node ? find_icon_for_source(&frame, node->id) : 0;
+  check(fill != 0 && border != 0 && icon != 0 &&
+        icon->stroke_color == fill->color,
+        "Annotations close restores its frozen outlined icon shell");
+  node = find_semantic_role(&frame, "Annotations", ReaderViewSemantic_Group);
+  command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                        node->id) : 0;
+  check(command != 0 &&
+        rect_equal(command->rect, ui0_rect(1156, 64, 186, 28)) &&
+        command->has_typography_role &&
+        command->typography_role == UI0TypographyRole_SectionTitle,
+        "Annotations title restores the frozen header placement");
+  node = find_semantic_role(&frame, "One", ReaderViewSemantic_Group);
+  command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                        node->id) : 0;
+  binding = node ? find_text_binding(&frame, node->id) : 0;
+  check(command != 0 &&
+        rect_equal(command->rect, ui0_rect(1078, 106, 300, 20)) &&
+        binding != 0 &&
+        binding->style == ReaderViewTextStyle_ChromeTitle,
+        "Annotations section heading restores the frozen twenty-pixel label "
+        "inside its twenty-six-pixel block");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRow, 40);
+  check(row != 0 && rect_equal(row->rect, ui0_rect(1078, 132, 300, 58)),
+        "Annotations row uses frozen section and row geometry");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRowStar, 40);
+  check(node != 0 && rect_equal(node->rect, ui0_rect(1320, 151, 20, 20)),
+        "Annotations star uses frozen 20px target");
+  icon = node ? find_icon_for_source(&frame, node->id) : 0;
+  check(icon != 0 && icon->icon_kind == UI0IconKind_Star &&
+        rect_equal(icon->rect, ui0_rect(1323, 154, 14, 14)) &&
+        icon->color == theme->colors[UI0ColorRole_TextMuted] &&
+        icon->stroke_color == theme->colors[UI0ColorRole_Surface] &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                 node ? node->id : 0) == 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlBorder,
+                                 node ? node->id : 0) == 0,
+        "Annotations unstarred icon uses the frozen 14px raster target "
+        "without a button shell");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRowMenu, 40);
+  check(node != 0 && rect_equal(node->rect, ui0_rect(1340, 147, 30, 28)) &&
+        text_equal(node->name, "Annotation actions"),
+        "Annotations row menu uses the frozen target and native name");
+  command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                        node->id) : 0;
+  binding = node ? find_text_binding(&frame, node->id) : 0;
+  check(command != 0 &&
+        rect_equal(command->rect, ui0_rect(1344, 147, 22, 28)) &&
+        command->has_text_alignment &&
+        command->text_align_x == UI0TextAlignX_Center &&
+        binding != 0 && text_equal(binding->text, "...") &&
+        find_icon_for_source(&frame, node ? node->id : 0) == 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                 node ? node->id : 0) == 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlBorder,
+                                 node ? node->id : 0) == 0,
+        "Annotations row menu restores the frozen centered literal ellipsis "
+        "without an icon or button shell");
+  node = find_semantic_role(&frame, "Bookmark - re10 loc 1",
+                            ReaderViewSemantic_Group);
+  command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                        node->id) : 0;
+  check(command != 0 &&
+        rect_equal(command->rect, ui0_rect(1091, 142, 221, 16)) &&
+        command->color == theme->colors[UI0ColorRole_TextSecondary] &&
+        command->has_typography_role &&
+        command->typography_role == UI0TypographyRole_Metadata,
+        "Annotations secondary record uses the frozen padded metadata row");
+  node = find_semantic_role(&frame, "Saved place",
+                            ReaderViewSemantic_Group);
+  command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                        node->id) : 0;
+  check(command != 0 &&
+        rect_equal(command->rect, ui0_rect(1091, 164, 221, 16)),
+        "Annotations primary record restores the frozen eight-pixel inset");
+  right_rows[0].flags |= ReaderViewRow_Selected | ReaderViewRow_Starred;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations selected-starred visual frame builds");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRow, 40);
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRowStar, 40);
+  icon = node ? find_icon_for_source(&frame, node->id) : 0;
+  check(row != 0 &&
+        count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
+                                 row->id) == 0 &&
+        icon != 0 && icon->color == theme->colors[UI0ColorRole_Focus],
+        "Annotations selected rows stay shell-free while starred color is "
+        "the exact focus token");
+  right_rows[0].flags = ReaderViewRow_Enabled;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations selected-starred visual state restores");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRow, 40);
+  right_id = row ? row->id : 0;
+  if (row)
+  {
+    rect = row->rect;
+    frame_input.ui = ui0_input_pointer(rect.x + 100,
+                                       rect.y + rect.h / 2,
+                                       1, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Annotations row press builds");
+    frame_input.ui = ui0_input_pointer(rect.x + 100,
+                                       rect.y + rect.h / 2,
+                                       0, 0, 1);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Annotations row release builds");
+  }
+  action = find_action(&frame, ReaderViewAction_ActivateRightRow);
+  check(action != 0 && action->key == 40 && frame.action_count == 1 &&
+        state.right_panel_open && state.active_right_key == 40 &&
+        state.focus_id == right_id && !state.focus_visible,
+        "Annotations row invokes exactly once and keeps panel/focus state");
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations direct-row selection follow-up frame builds");
+  row = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRow, 40);
+  check(row != 0 &&
+        (row->flags & ReaderViewSemantic_Selected) != 0,
+        "direct annotation activation owns bounded selected chrome state");
+
+  filter = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilter,
+    ReaderViewRightFilter_All);
+  if (filter)
+  {
+    rect = filter->rect;
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       1, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Annotations filter press builds");
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       0, 0, 1);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Annotations filter release builds");
+  }
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations filter popup builds");
+  node = find_semantic_role(&frame, "Annotation filters",
+                            ReaderViewSemantic_Menu);
+  check(node != 0 && rect_equal(node->rect, ui0_rect(1078, 96, 300, 136)),
+        "Annotations filter popup uses the frozen containment rectangle and "
+        "native name");
+  option = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilterOption,
+    ReaderViewRightFilter_All);
+  check(option != 0 && rect_equal(option->rect,
+                                  ui0_rect(1096, 100, 274, 29)) &&
+        text_equal(option->name, "All (1)") &&
+        (option->flags & ReaderViewSemantic_Focused) != 0 &&
+        state.focus_id == option->id && !state.focus_visible &&
+        state.restore_focus_id == filter->id,
+        "Filter popup initializes selected option focus invisibly");
+  binding = option ? find_text_binding(&frame, option->id) : 0;
+  indicator = option ?
+    find_draw_for_source(&frame, UI0DrawOp_IndicatorFill,
+                         option->id) : 0;
+  check(binding != 0 && text_equal(binding->text, "All (1)") &&
+        indicator != 0 &&
+        rect_equal(indicator->rect, ui0_rect(1086, 106, 3, 17)) &&
+        indicator->color == theme->colors[UI0ColorRole_Focus],
+        "Filter All publishes the exact counted label and selected rail");
+  option = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilterOption,
+    ReaderViewRightFilter_Highlights);
+  check(option != 0 && rect_equal(option->rect,
+                                  ui0_rect(1096, 132, 274, 29)) &&
+        text_equal(option->name, "All Highlight Colors (0)") &&
+        find_text_binding(&frame, option ? option->id : 0) != 0 &&
+        text_equal(find_text_binding(&frame, option ? option->id : 0)->text,
+                   "All Highlight Colors (0)"),
+        "Filter Highlights option uses frozen ordering");
+  option = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilterOption,
+    ReaderViewRightFilter_Notes);
+  check(option != 0 && rect_equal(option->rect,
+                                  ui0_rect(1096, 164, 274, 29)) &&
+        text_equal(option->name, "Notes (0)") &&
+        find_text_binding(&frame, option ? option->id : 0) != 0 &&
+        text_equal(find_text_binding(&frame, option ? option->id : 0)->text,
+                   "Notes (0)"),
+        "Filter Notes option uses frozen ordering");
+  option = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilterOption,
+    ReaderViewRightFilter_Bookmarks);
+  check(option != 0 && rect_equal(option->rect,
+                                  ui0_rect(1096, 196, 274, 29)) &&
+        text_equal(option->name, "Bookmarks (1)") &&
+        find_text_binding(&frame, option ? option->id : 0) != 0 &&
+        text_equal(find_text_binding(&frame, option ? option->id : 0)->text,
+                   "Bookmarks (1)"),
+        "Filter Bookmarks option uses frozen ordering");
+
+  check(reader_view_accessibility_focus(&state, right_close_id) &&
+        reader_view_accessibility_invoke(&state, right_close_id),
+        "underlying Annotations close queues while filter popup is active");
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "filter popup accessibility-containment frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightPanelClose, 0);
+  option = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilterOption,
+    ReaderViewRightFilter_All);
+  check(state.right_panel_open && state.popup == ReaderViewPopup_RightFilter &&
+        frame.action_count == 0 && node != 0 &&
+        (node->flags & (ReaderViewSemantic_Enabled |
+                        ReaderViewSemantic_Focusable |
+                        ReaderViewSemantic_Focused)) == 0 &&
+        option != 0 && (option->flags & ReaderViewSemantic_Focused) != 0 &&
+        state.focus_id == option->id,
+        "popup consumes blocked AT focus/invoke and keeps focus contained");
+
+  frame_input.escape_pressed = 1;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Filter popup Escape builds");
+  check(state.popup == ReaderViewPopup_None &&
+        state.restore_focus_id == 0 && filter &&
+        state.focus_id == filter->id,
+        "Filter Escape closes and restores the exact trigger");
+
+  state.left_panel = ReaderViewLeftPanel_Contents;
+  state.right_panel_open = 1;
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "simultaneous panel Escape layout resolves");
+  memset(&frame_input, 0, sizeof(frame_input));
+  frame_input.escape_pressed = 1;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame) &&
+        state.left_panel == ReaderViewLeftPanel_None &&
+        state.right_panel_open,
+        "Escape closes TOC or Find before the docked Annotations panel");
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "right-only Escape layout resolves");
+  memset(&frame_input, 0, sizeof(frame_input));
+  frame_input.escape_pressed = 1;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame) &&
+        state.left_panel == ReaderViewLeftPanel_None &&
+        state.right_panel_open && state.popup == ReaderViewPopup_None,
+        "Escape leaves the frozen docked Annotations panel open");
+
+  memset(&frame_input, 0, sizeof(frame_input));
+  filter = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilter,
+    ReaderViewRightFilter_All);
+  if (filter)
+  {
+    rect = filter->rect;
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       1, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Filter reopen press builds");
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       0, 0, 1);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Filter reopen release builds");
+  }
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Filter reopened popup builds");
+  option = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilterOption,
+    ReaderViewRightFilter_Bookmarks);
+  if (option)
+  {
+    rect = option->rect;
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       1, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Bookmarks filter option press builds");
+    frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
+                                       rect.y + rect.h / 2,
+                                       0, 0, 1);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Bookmarks filter option release builds");
+  }
+  action = find_action(&frame, ReaderViewAction_RightFilterChanged);
+  check(action != 0 &&
+        action->right_filter == ReaderViewRightFilter_Bookmarks &&
+        state.right_filter == ReaderViewRightFilter_Bookmarks &&
+        state.right_scroll_y == 0 && state.popup == ReaderViewPopup_None,
+        "Bookmarks filter selection emits one bounded action and closes");
+
+  projection.right.available_filters = ReaderViewRightFilterFlag_All;
+  state.popup = ReaderViewPopup_RightFilter;
+  state.right_filter_menu_flags = ReaderViewRightFilterFlag_All;
+  state.restore_focus_id = filter ? filter->id : 0;
+  state.focus_id = state.restore_focus_id;
+  state.focus_visible = 1;
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "narrowed filter popup builds with a stale prior selection");
+  option = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilterOption,
+    ReaderViewRightFilter_All);
+  check(option != 0 &&
+        (option->flags & ReaderViewSemantic_Focused) != 0 &&
+        state.focus_id == option->id && state.focus_visible &&
+        state.right_filter == ReaderViewRightFilter_Bookmarks &&
+        frame.action_count == 0,
+        "filter popup contains focus on first available choice without "
+        "silently changing host-visible selection");
+  {
+    UI0ID expected_filter_focus = state.restore_focus_id;
+    projection.right.available_filters = 0;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame) &&
+          state.popup == ReaderViewPopup_None &&
+          state.right_filter_menu_flags == 0 &&
+          state.restore_focus_id == 0 &&
+          state.focus_id == expected_filter_focus && state.focus_visible &&
+          find_semantic_role(&frame, "Annotation filters",
+                             ReaderViewSemantic_Menu) == 0 &&
+          (frame.change_flags & ReaderViewFrameChange_StateChanged) != 0 &&
+          (frame.change_flags & ReaderViewFrameChange_FocusChanged) != 0,
+          "removing available filters closes the stale popup and restores "
+          "its trigger without a dangling option focus");
+  }
+  projection.right.available_filters = ReaderViewRightFilterFlag_All |
+                                       ReaderViewRightFilterFlag_Bookmarks |
+                                       ReaderViewRightFilterFlag_Highlights |
+                                       ReaderViewRightFilterFlag_Notes;
+  state.popup = ReaderViewPopup_None;
+  state.restore_focus_id = 0;
+
+  memset(right_rows, 0, sizeof(right_rows));
+  right_rows[0].key = 70;
+  right_rows[0].kind = ReaderViewRightRow_Note;
+  right_rows[0].primary.data = "Colored note";
+  right_rows[0].primary.size = 12;
+  right_rows[0].color_key = 7000;
+  right_rows[0].rail_color = 0xff2468acu;
+  right_rows[0].flags = ReaderViewRow_Enabled;
+  projection.right.rows = right_rows;
+  projection.right.row_count = 1;
+  projection.right.total_count = 1;
+  projection.right.available_filters = ReaderViewRightFilterFlag_Notes;
+  projection.right.all_count = 1;
+  projection.right.bookmark_count = 0;
+  projection.right.highlight_count = 0;
+  projection.right.note_count = 1;
+  state.right_filter = ReaderViewRightFilter_Notes;
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Notes-only colored-note projection builds without attachment");
+  command = find_draw_for_rect(&frame, UI0DrawOp_ControlFill,
+                               ui0_rect(1078, 108, 4, 56));
+  check((right_rows[0].flags & ReaderViewRow_AttachedToPrevious) == 0 &&
+        command != 0 && command->color == 0xff2468acu &&
+        command->stroke_color == 0xff2468acu,
+        "Notes-only standalone note retains the exact caller rail color in "
+        "the light profile");
+  {
+    UI0TokenSet dark_tokens = ui0_default_tokens(UI0ThemeKind_Dark);
+    UI0ResolvedTheme dark_theme = ui0_resolve_tokens(&dark_tokens);
+    build_input.theme = &dark_theme;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "Notes-only colored-note dark-profile frame builds");
+    command = find_draw_for_rect(&frame, UI0DrawOp_ControlFill,
+                                 ui0_rect(1078, 108, 4, 56));
+    check(command != 0 && command->color == 0xff2468acu &&
+          command->stroke_color == 0xff2468acu,
+          "Notes-only standalone note retains the exact caller rail color "
+          "in the dark profile");
+    build_input.theme = theme;
+  }
+
+  {
+    typedef struct RightMenuExpectation
+    {
+      ReaderViewRightRowKind kind;
+      ReaderViewRightActionFlags flags;
+      UI0S32 count;
+      ReaderViewSemanticControl controls[3];
+      ReaderViewActionKind actions[3];
+      const char *labels[3];
+    } RightMenuExpectation;
+    static const RightMenuExpectation variants[3] = {
+      {
+        ReaderViewRightRow_Bookmark,
+        ReaderViewRightAction_Activate |
+          ReaderViewRightAction_ToggleStar |
+          ReaderViewRightAction_Delete,
+        2,
+        {
+          ReaderViewSemanticControl_RightActionGoTo,
+          ReaderViewSemanticControl_RightActionDelete,
+          ReaderViewSemanticControl_None,
+        },
+        {
+          ReaderViewAction_ActivateRightRow,
+          ReaderViewAction_DeleteRightRow,
+          ReaderViewAction_None,
+        },
+        {"Go to", "Delete bookmark", ""},
+      },
+      {
+        ReaderViewRightRow_Note,
+        ReaderViewRightAction_Activate |
+          ReaderViewRightAction_ToggleStar |
+          ReaderViewRightAction_EditNote |
+          ReaderViewRightAction_Delete,
+        3,
+        {
+          ReaderViewSemanticControl_RightActionGoTo,
+          ReaderViewSemanticControl_RightActionEditNote,
+          ReaderViewSemanticControl_RightActionDelete,
+        },
+        {
+          ReaderViewAction_ActivateRightRow,
+          ReaderViewAction_EditRightRowNote,
+          ReaderViewAction_DeleteRightRow,
+        },
+        {"Go to", "Edit note", "Delete note"},
+      },
+      {
+        ReaderViewRightRow_Highlight,
+        ReaderViewRightAction_Activate |
+          ReaderViewRightAction_ToggleStar |
+          ReaderViewRightAction_Delete,
+        3,
+        {
+          ReaderViewSemanticControl_RightActionGoTo,
+          ReaderViewSemanticControl_RightActionToggleStar,
+          ReaderViewSemanticControl_RightActionDelete,
+        },
+        {
+          ReaderViewAction_ActivateRightRow,
+          ReaderViewAction_ToggleRightRowStar,
+          ReaderViewAction_DeleteRightRow,
+        },
+        {"Go to", "Add star", "Delete highlight"},
+      },
+    };
+    UI0S32 variant_index;
+    for (variant_index = 0; variant_index < 3; ++variant_index)
+    {
+      const RightMenuExpectation *variant = variants + variant_index;
+      right_rows[0].kind = variant->kind;
+      right_rows[0].actions = variant->flags;
+      right_rows[0].section.data = "One";
+      right_rows[0].section.size = 3;
+      state.popup = ReaderViewPopup_None;
+      state.restore_focus_id = 0;
+      state.focus_id = 0;
+      state.focus_visible = 0;
+      memset(&frame_input, 0, sizeof(frame_input));
+      build_input.frame_index += 1;
+      check(reader_view_build(&build_input, &storage, &frame),
+            "kind-specific annotation action seed frame builds");
+      node = find_semantic_control_source(
+        &frame, ReaderViewSemanticControl_RightRowStar, 70);
+      check(node != 0,
+            "Bookmark, Note, and Highlight retain the frozen inline star");
+      node = find_semantic_control_source(
+        &frame, ReaderViewSemanticControl_RightRowMenu, 70);
+      right_menu_id = node ? node->id : 0;
+      check(right_menu_id != 0 && node != 0 &&
+            text_equal(node->name, "Annotation actions"),
+            "kind-specific annotation row exposes its named menu trigger");
+
+      state.popup = ReaderViewPopup_RightRowActions;
+      state.right_menu_key = 70;
+      state.right_menu_kind = variant->kind;
+      state.right_menu_actions = variant->flags;
+      state.restore_focus_id = right_menu_id;
+      state.focus_id = right_menu_id;
+      state.focus_visible = 1;
+      memset(&frame_input, 0, sizeof(frame_input));
+      build_input.frame_index += 1;
+      check(reader_view_build(&build_input, &storage, &frame),
+            "kind-specific annotation row action popup builds");
+      node = find_semantic_role(&frame, "Annotation actions",
+                                ReaderViewSemantic_Menu);
+      check(node != 0 &&
+            rect_equal(node->rect,
+                       ui0_rect(1184, 179, 186,
+                                variant->count == 2 ? 86 : 120)) &&
+            count_semantic_role(&frame, ReaderViewSemantic_MenuItem) ==
+              variant->count,
+            "annotation action popup restores frozen anchored geometry and "
+            "kind-specific row count");
+      for (index = 0; index < variant->count; ++index)
+      {
+        option = find_semantic_control_source(
+          &frame, variant->controls[index], 70);
+        check(option != 0 &&
+              rect_equal(option->rect,
+                         ui0_rect(1202, 189 + index * 34, 160, 32)) &&
+              text_equal(option->name, variant->labels[index]),
+              "annotation action uses exact frozen body geometry and copy");
+      }
+      check((variant->kind == ReaderViewRightRow_Highlight ||
+             find_semantic_control_source(
+               &frame,
+               ReaderViewSemanticControl_RightActionToggleStar, 70) == 0) &&
+            (variant->kind == ReaderViewRightRow_Note ||
+             find_semantic_control_source(
+               &frame,
+               ReaderViewSemanticControl_RightActionEditNote, 70) == 0),
+            "annotation popup suppresses kind-inapplicable Star and Edit "
+            "items without removing the inline star");
+
+      for (index = 0; index < variant->count; ++index)
+      {
+        state.popup = ReaderViewPopup_RightRowActions;
+        state.right_menu_key = 70;
+        state.right_menu_kind = variant->kind;
+        state.right_menu_actions = variant->flags;
+        state.restore_focus_id = right_menu_id;
+        state.focus_id = right_menu_id;
+        state.focus_visible = 1;
+        memset(&frame_input, 0, sizeof(frame_input));
+        build_input.frame_index += 1;
+        check(reader_view_build(&build_input, &storage, &frame),
+              "annotation row action invocation seed builds");
+        option = find_semantic_control_source(
+          &frame, variant->controls[index], 70);
+        check(option != 0 &&
+              reader_view_accessibility_focus(&state,
+                                              option ? option->id : 0) &&
+              reader_view_accessibility_invoke(&state,
+                                               option ? option->id : 0),
+              "annotation row action accepts contained accessibility invoke");
+        build_input.frame_index += 1;
+        check(reader_view_build(&build_input, &storage, &frame),
+              "annotation row action invocation frame builds");
+        action = find_action(&frame, variant->actions[index]);
+        check(action != 0 && action->key == 70 && frame.action_count == 1 &&
+              state.popup == ReaderViewPopup_None &&
+              state.restore_focus_id == 0 &&
+              state.focus_id == right_menu_id && state.focus_visible &&
+              state.active_right_key == 0,
+              "annotation action closes before return and restores the exact "
+              "row-menu focus while clearing the vanished prior-row selection");
+      }
+    }
+
+    right_rows[0].kind = ReaderViewRightRow_Highlight;
+    right_rows[0].actions = variants[2].flags;
+    state.active_right_key = 70;
+    state.popup = ReaderViewPopup_RightRowActions;
+    state.right_menu_key = 70;
+    state.right_menu_kind = ReaderViewRightRow_Highlight;
+    state.right_menu_actions = right_rows[0].actions;
+    state.restore_focus_id = right_menu_id;
+    state.focus_id = right_menu_id;
+    state.focus_visible = 1;
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "annotation popup changing-actions seed frame builds");
+    option = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightActionToggleStar, 70);
+    state.focus_id = option ? option->id : 0;
+    state.focus_visible = 1;
+    right_rows[0].actions = ReaderViewRightAction_Activate |
+                            ReaderViewRightAction_Delete;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame) &&
+          state.popup == ReaderViewPopup_None &&
+          state.active_right_key == 70 && state.focus_id == 0 &&
+          !state.focus_visible &&
+          (frame.change_flags & ReaderViewFrameChange_StateChanged) != 0 &&
+          (frame.change_flags & ReaderViewFrameChange_FocusChanged) != 0 &&
+          find_semantic_role(&frame, "Annotation actions",
+                             ReaderViewSemantic_Menu) == 0,
+          "changing annotation actions closes the stale popup without "
+          "clearing the selected row or leaving stale focus");
+
+    right_rows[0].actions = variants[2].flags;
+    state.popup = ReaderViewPopup_RightRowActions;
+    state.right_menu_key = 70;
+    state.right_menu_kind = ReaderViewRightRow_Highlight;
+    state.right_menu_actions = right_rows[0].actions;
+    state.restore_focus_id = right_menu_id;
+    state.focus_id = right_menu_id;
+    state.focus_visible = 0;
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "pointer-style annotation popup entry builds");
+    option = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightActionGoTo, 70);
+    check(option != 0 &&
+          (option->flags & ReaderViewSemantic_Focused) != 0 &&
+          state.focus_id == option->id && !state.focus_visible,
+          "pointer-opened annotation popup enters its first item invisibly");
+
+    state.popup = ReaderViewPopup_None;
+    state.restore_focus_id = 0;
+    state.focus_id = right_menu_id;
+    state.focus_visible = 1;
+    memset(&frame_input, 0, sizeof(frame_input));
+    frame_input.ui = ui0_input_keyboard(1, 0, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame) &&
+          state.popup == ReaderViewPopup_RightRowActions,
+          "keyboard activation opens the annotation action popup");
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "keyboard-opened annotation popup entry frame builds");
+    option = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightActionGoTo, 70);
+    check(option != 0 && state.focus_id == option->id &&
+          state.focus_visible,
+          "keyboard-opened annotation popup enters its first item visibly");
+    frame_input.move_vertical_delta = 1;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "annotation popup arrow-navigation frame builds");
+    option = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightActionToggleStar, 70);
+    check(option != 0 && state.focus_id == option->id &&
+          state.focus_visible,
+          "annotation popup Down moves to the next kind-specific item");
+    memset(&frame_input, 0, sizeof(frame_input));
+    frame_input.ui = ui0_input_keyboard(1, 0, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "annotation popup keyboard activation frame builds");
+    action = find_action(&frame, ReaderViewAction_ToggleRightRowStar);
+    check(action != 0 && action->key == 70 && frame.action_count == 1 &&
+          state.popup == ReaderViewPopup_None &&
+          state.focus_id == right_menu_id && state.focus_visible,
+          "keyboard annotation action executes once and restores its trigger");
+
+    for (variant_index = 0; variant_index < 2; ++variant_index)
+    {
+      right_rows[0].kind = variants[variant_index].kind;
+      right_rows[0].actions = ReaderViewRightAction_ToggleStar;
+      state.popup = ReaderViewPopup_None;
+      state.restore_focus_id = 0;
+      memset(&frame_input, 0, sizeof(frame_input));
+      build_input.frame_index += 1;
+      check(reader_view_build(&build_input, &storage, &frame),
+            "inline-star-only annotation row frame builds");
+      node = find_semantic_control_source(
+        &frame, ReaderViewSemanticControl_RightRowStar, 70);
+      option = find_semantic_control_source(
+        &frame, ReaderViewSemanticControl_RightRowMenu, 70);
+      check(node != 0 &&
+            (node->flags & ReaderViewSemantic_Enabled) != 0 &&
+            option != 0 &&
+            (option->flags & ReaderViewSemantic_Enabled) == 0 &&
+            reader_view_accessibility_invoke(
+              &state, option ? option->id : 0),
+            "Bookmark and Note retain inline star while an empty action "
+            "popup trigger is disabled");
+      build_input.frame_index += 1;
+      check(reader_view_build(&build_input, &storage, &frame) &&
+            state.popup == ReaderViewPopup_None && frame.action_count == 0,
+            "disabled empty annotation menu cannot open through AT invoke");
+    }
+
+    right_rows[0].kind = ReaderViewRightRow_Highlight;
+    right_rows[0].actions = variants[2].flags;
+    state.active_right_key = 70;
+    state.popup = ReaderViewPopup_RightRowActions;
+    state.right_menu_key = 70;
+    state.right_menu_kind = ReaderViewRightRow_Highlight;
+    state.right_menu_actions = right_rows[0].actions;
+    state.restore_focus_id = right_menu_id;
+    state.focus_id = right_menu_id;
+    state.focus_visible = 1;
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "annotation Delete workflow popup seed builds");
+    option = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightActionDelete, 70);
+    check(option != 0 && reader_view_accessibility_invoke(
+            &state, option ? option->id : 0),
+          "annotation Delete workflow queues the popup action");
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "annotation Delete workflow action frame builds");
+    action = find_action(&frame, ReaderViewAction_DeleteRightRow);
+    check(action != 0 && action->key == 70 &&
+          state.popup == ReaderViewPopup_None &&
+          state.focus_id == right_menu_id && state.right_menu_key == 70,
+          "annotation Delete returns once and restores the owning trigger");
+    projection.right.rows = 0;
+    projection.right.row_count = 0;
+    projection.right.total_count = 0;
+    projection.right.all_count = 0;
+    projection.right.highlight_count = 0;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame) &&
+          state.right_menu_key == 0 && state.active_right_key == 0 &&
+          state.focus_id == 0 && !state.focus_visible &&
+          (frame.change_flags & ReaderViewFrameChange_StateChanged) != 0 &&
+          (frame.change_flags & ReaderViewFrameChange_FocusChanged) != 0,
+          "removing a normally deleted annotation clears its restored trigger "
+          "and transient selection on the next projection");
+    projection.right.rows = right_rows;
+    projection.right.row_count = 1;
+    projection.right.total_count = 1;
+    projection.right.all_count = 1;
+    projection.right.highlight_count = 1;
+
+    state.popup = ReaderViewPopup_RightRowActions;
+    state.right_menu_key = 70;
+    state.right_menu_kind = ReaderViewRightRow_Highlight;
+    state.right_menu_actions = right_rows[0].actions;
+    state.restore_focus_id = right_menu_id;
+    state.focus_id = right_menu_id;
+    state.focus_visible = 1;
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "annotation popup stale-row seed frame builds");
+    option = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightActionGoTo, 70);
+    state.focus_id = option ? option->id : 0;
+    state.focus_visible = 1;
+    state.hot_id = option ? option->id : 0;
+    state.active_id = option ? option->id : 0;
+    state.pending_accessibility_focus_id = option ? option->id : 0;
+    state.pending_accessibility_invoke_id = option ? option->id : 0;
+    projection.right.rows = 0;
+    projection.right.row_count = 0;
+    projection.right.total_count = 0;
+    projection.right.all_count = 0;
+    projection.right.highlight_count = 0;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame) &&
+          state.popup == ReaderViewPopup_None &&
+          state.restore_focus_id == 0 && state.right_menu_key == 0 &&
+          state.focus_id == 0 && !state.focus_visible &&
+          state.hot_id == 0 && state.active_id == 0 &&
+          state.pending_accessibility_focus_id == 0 &&
+          state.pending_accessibility_invoke_id == 0 &&
+          (frame.change_flags & ReaderViewFrameChange_StateChanged) != 0 &&
+          (frame.change_flags & ReaderViewFrameChange_FocusChanged) != 0 &&
+          find_semantic_role(&frame, "Annotation actions",
+                             ReaderViewSemantic_Menu) == 0,
+          "removing the popup owner closes stale annotation state without an "
+          "empty menu root or dangling focus");
+    projection.right.rows = right_rows;
+    projection.right.row_count = 1;
+    projection.right.total_count = 1;
+    projection.right.all_count = 1;
+    projection.right.highlight_count = 1;
+  }
+
+  {
+    ReaderViewRightRow bottom_rows[20];
+    UI0ID top_menu_id;
+    UI0ID top_option_id;
+    UI0ID bottom_menu_id;
+    UI0ID bottom_option_id;
+    memset(bottom_rows, 0, sizeof(bottom_rows));
+    for (index = 0; index < 20; ++index)
+    {
+      bottom_rows[index].key = (ReaderViewKey)(800 + index);
+      bottom_rows[index].kind = ReaderViewRightRow_Bookmark;
+      bottom_rows[index].section.data = "One";
+      bottom_rows[index].section.size = 3;
+      bottom_rows[index].primary.data = "Saved place";
+      bottom_rows[index].primary.size = 11;
+      bottom_rows[index].flags = ReaderViewRow_Enabled;
+      bottom_rows[index].actions = ReaderViewRightAction_Activate |
+        ReaderViewRightAction_ToggleStar | ReaderViewRightAction_Delete;
+    }
+    projection.right.rows = bottom_rows;
+    projection.right.row_count = 20;
+    projection.right.total_count = 20;
+    projection.right.all_count = 20;
+    projection.right.bookmark_count = 20;
+    projection.right.highlight_count = 0;
+    projection.right.note_count = 0;
+    projection.right.available_filters = ReaderViewRightFilterFlag_All |
+      ReaderViewRightFilterFlag_Bookmarks;
+    state.right_filter = ReaderViewRightFilter_All;
+    state.popup = ReaderViewPopup_None;
+    state.right_scroll_y = 0;
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "near-bottom annotation menu seed frame builds");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightRowMenu, 808);
+    right_menu_id = node ? node->id : 0;
+    state.popup = ReaderViewPopup_RightRowActions;
+    state.right_menu_key = 808;
+    state.right_menu_kind = ReaderViewRightRow_Bookmark;
+    state.right_menu_actions = right_rows[0].actions;
+    state.restore_focus_id = right_menu_id;
+    state.focus_id = right_menu_id;
+    state.focus_visible = 0;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "near-bottom annotation action popup builds");
+    node = find_semantic_role(&frame, "Annotation actions",
+                              ReaderViewSemantic_Menu);
+    option = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightActionGoTo, 808);
+    check(node != 0 && rect_equal(node->rect,
+                                  ui0_rect(1184, 585, 186, 86)) &&
+          option != 0 && rect_equal(option->rect,
+                                    ui0_rect(1202, 595, 160, 32)),
+          "annotation action popup flips above a near-bottom trigger and "
+          "retains frozen flat-menu geometry");
+    row = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightRowStar, 807);
+    check(row != 0 && node != 0 &&
+          find_draw_index_for_source(&frame, UI0DrawOp_Icon,
+                                     row ? row->id : 0) >= 0 &&
+          find_draw_index_for_source(&frame, UI0DrawOp_ControlFill,
+                                     node ? node->id : 0) >
+            find_draw_index_for_source(&frame, UI0DrawOp_Icon,
+                                       row ? row->id : 0),
+          "overlapping normal-row star paint precedes the popup surface in "
+          "root z-order");
+
+    state.popup = ReaderViewPopup_None;
+    state.restore_focus_id = 0;
+    state.right_menu_key = 0;
+    state.right_menu_actions = ReaderViewRightAction_None;
+    state.focus_id = 0;
+    state.focus_visible = 0;
+    state.right_scroll_y = 0;
+    memset(&frame_input, 0, sizeof(frame_input));
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "top-clipped annotation owner seed frame builds");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightRowMenu, 800);
+    top_menu_id = node ? node->id : 0;
+    state.popup = ReaderViewPopup_RightRowActions;
+    state.right_menu_key = 800;
+    state.right_menu_kind = ReaderViewRightRow_Bookmark;
+    state.right_menu_actions = bottom_rows[0].actions;
+    state.restore_focus_id = top_menu_id;
+    state.focus_id = top_menu_id;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "top annotation owner popup seed builds");
+    option = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightActionGoTo, 800);
+    top_option_id = option ? option->id : 0;
+    state.focus_id = top_option_id;
+    state.focus_visible = 1;
+    state.right_scroll_y = 80;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame) &&
+          state.popup == ReaderViewPopup_None &&
+          state.right_menu_key == 0 && state.restore_focus_id == 0 &&
+          state.focus_id == 0 && !state.focus_visible &&
+          find_semantic_control_source(
+            &frame, ReaderViewSemanticControl_RightRowStar, 800) == 0 &&
+          find_semantic_control_source(
+            &frame, ReaderViewSemanticControl_RightRowMenu, 800) == 0 &&
+          find_semantic_role(&frame, "Annotation actions",
+                             ReaderViewSemantic_Menu) == 0,
+          "a top-partial row cannot retain a popup whose menu trigger is "
+          "fully clipped");
+
+    state.popup = ReaderViewPopup_None;
+    state.restore_focus_id = 0;
+    state.right_menu_key = 0;
+    state.right_menu_actions = ReaderViewRightAction_None;
+    state.focus_id = 0;
+    state.focus_visible = 0;
+    state.right_scroll_y = 200;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "bottom-clipped annotation owner seed frame builds");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightRowMenu, 810);
+    bottom_menu_id = node ? node->id : 0;
+    state.popup = ReaderViewPopup_RightRowActions;
+    state.right_menu_key = 810;
+    state.right_menu_kind = ReaderViewRightRow_Bookmark;
+    state.right_menu_actions = bottom_rows[10].actions;
+    state.restore_focus_id = bottom_menu_id;
+    state.focus_id = bottom_menu_id;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "bottom annotation owner popup seed builds");
+    option = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightActionGoTo, 810);
+    bottom_option_id = option ? option->id : 0;
+    state.focus_id = bottom_option_id;
+    state.focus_visible = 1;
+    state.right_scroll_y = 70;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame) &&
+          state.popup == ReaderViewPopup_None &&
+          state.right_menu_key == 0 && state.restore_focus_id == 0 &&
+          state.focus_id == 0 && !state.focus_visible &&
+          find_semantic_control_source(
+            &frame, ReaderViewSemanticControl_RightRowStar, 810) == 0 &&
+          find_semantic_control_source(
+            &frame, ReaderViewSemanticControl_RightRowMenu, 810) == 0 &&
+          find_semantic_role(&frame, "Annotation actions",
+                             ReaderViewSemantic_Menu) == 0,
+          "a bottom-partial row cannot retain a popup whose menu trigger is "
+          "fully clipped");
+  }
+
+  projection.right.rows = right_rows;
+  projection.right.row_count = 1;
+  projection.right.total_count = 1;
+  projection.right.all_count = 1;
+  projection.right.bookmark_count = 0;
+  projection.right.highlight_count = 1;
+  projection.right.note_count = 0;
+  projection.right.available_filters = ReaderViewRightFilterFlag_All |
+                                       ReaderViewRightFilterFlag_Bookmarks |
+                                       ReaderViewRightFilterFlag_Highlights |
+                                       ReaderViewRightFilterFlag_Notes;
+  state.popup = ReaderViewPopup_None;
+  state.restore_focus_id = 0;
+
+  {
+    static const ReaderViewRightFilter filters[4] = {
+      ReaderViewRightFilter_All,
+      ReaderViewRightFilter_Bookmarks,
+      ReaderViewRightFilter_Highlights,
+      ReaderViewRightFilter_Notes,
+    };
+    static const char *messages[4] = {
+      "No annotations",
+      "No bookmarks",
+      "No highlights",
+      "No notes",
+    };
+    projection.right.rows = 0;
+    projection.right.row_count = 0;
+    projection.right.total_count = 0;
+    projection.right.all_count = 0;
+    projection.right.bookmark_count = 0;
+    projection.right.highlight_count = 0;
+    projection.right.note_count = 0;
+    projection.right.available_filters = ReaderViewRightFilterFlag_All |
+                                         ReaderViewRightFilterFlag_Bookmarks |
+                                         ReaderViewRightFilterFlag_Highlights |
+                                         ReaderViewRightFilterFlag_Notes;
+    state.popup = ReaderViewPopup_None;
+    state.restore_focus_id = 0;
+    memset(&frame_input, 0, sizeof(frame_input));
+    for (index = 0; index < 4; ++index)
+    {
+      state.right_filter = filters[index];
+      build_input.frame_index += 1;
+      check(reader_view_build(&build_input, &storage, &frame),
+            "filter-specific Annotations empty frame builds");
+      node = find_semantic_role(&frame, messages[index],
+                                ReaderViewSemantic_Status);
+      command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                            node->id) : 0;
+      check(node != 0 && command != 0 &&
+            rect_equal(node->rect, ui0_rect(1078, 144, 300, 24)) &&
+            rect_equal(command->rect, ui0_rect(1078, 144, 300, 24)) &&
+            rect_equal(command->clip_rect, ui0_rect(1078, 144, 300, 24)) &&
+            command->color == theme->colors[UI0ColorRole_TextMuted] &&
+            command->has_text_alignment &&
+            command->text_align_x == UI0TextAlignX_Start &&
+            command->text_align_y == UI0TextAlignY_Center &&
+            command->has_typography_role &&
+            command->typography_role == UI0TypographyRole_Body &&
+            command->typography_char_width == 8 &&
+            command->typography_line_height == 16 &&
+            count_semantic(&frame, "Nothing here") == 0,
+            "All/Bookmarks/Highlights/Notes empty copy uses the exact "
+            "frozen position and muted body style");
+    }
+    projection.labels.no_notes.data = "Localized no notes";
+    projection.labels.no_notes.size = 18;
+    state.right_filter = ReaderViewRightFilter_Notes;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame) &&
+          find_semantic_role(&frame, "Localized no notes",
+                             ReaderViewSemantic_Status) != 0,
+          "Annotations empty copy remains an explicit caller-localized label");
+    projection.labels.no_notes.data = 0;
+    projection.labels.no_notes.size = 0;
+  }
+
+  memset(right_rows, 0, sizeof(right_rows));
+  right_rows[0].key = 70;
+  right_rows[0].kind = ReaderViewRightRow_Highlight;
+  right_rows[0].primary.data = "Highlight";
+  right_rows[0].primary.size = 9;
+  right_rows[0].color_key = 5000;
+  right_rows[0].rail_color = 0xff2468acu;
+  right_rows[0].flags = ReaderViewRow_Enabled;
+  right_rows[1].key = 71;
+  right_rows[1].kind = ReaderViewRightRow_Note;
+  right_rows[1].primary.data = "Note";
+  right_rows[1].primary.size = 4;
+  right_rows[1].color_key = 5000;
+  right_rows[1].rail_color = 0xff2468acu;
+  right_rows[1].flags = ReaderViewRow_Enabled |
+                        ReaderViewRow_AttachedToPrevious;
+  projection.right.rows = right_rows;
+  projection.right.row_count = 2;
+  projection.right.total_count = 2;
+  projection.right.available_filters = ReaderViewRightFilterFlag_All |
+                                       ReaderViewRightFilterFlag_Bookmarks |
+                                       ReaderViewRightFilterFlag_Highlights |
+                                       ReaderViewRightFilterFlag_Notes;
+  state.right_filter = ReaderViewRightFilter_All;
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "valid attached annotation projection builds");
+  right_rows[1].rail_color = 0;
+  build_input.frame_index += 1;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_InvalidAttachment) != 0,
+        "attached note requires a nonzero resolved rail color");
+  right_rows[1].rail_color = 0xff13579bu;
+  build_input.frame_index += 1;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_InvalidAttachment) != 0,
+        "attached highlight and note require one continuous resolved rail");
+  right_rows[1].rail_color = 0xff2468acu;
+  right_rows[0].color_key = 0;
+  build_input.frame_index += 1;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_InvalidAttachment) != 0,
+        "invalid attached annotation projection fails deterministically");
+  right_rows[0].color_key = 5000;
+  right_rows[0].section.data = 0;
+  right_rows[0].section.size = 5;
+  right_rows[1].section.data = 0;
+  right_rows[1].section.size = 5;
+  build_input.frame_index += 1;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_InvalidText) != 0 &&
+        (frame.error_flags & ReaderViewFrameError_InvalidAttachment) != 0,
+        "invalid attached section text fails closed without comparing null "
+        "storage");
+  right_rows[0].section.data = "Chapter One";
+  right_rows[0].section.size = 11;
+  right_rows[1].section.data = "Chapter Two";
+  right_rows[1].section.size = 11;
+  build_input.frame_index += 1;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_InvalidAttachment) != 0,
+        "attached note cannot insert a different section between its "
+        "highlight pair");
+  right_rows[0].section.data = 0;
+  right_rows[0].section.size = 0;
+  right_rows[1].section.data = 0;
+  right_rows[1].section.size = 0;
+  right_rows[1].flags = ReaderViewRow_Enabled | (1u << 30);
+  build_input.frame_index += 1;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+        "unknown projected row bits fail deterministically");
+  right_rows[1].flags = ReaderViewRow_Enabled |
+                        ReaderViewRow_AttachedToPrevious;
+  right_rows[1].actions = 1u << 30;
+  build_input.frame_index += 1;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+        "unknown projected right-action bits fail deterministically");
+  right_rows[1].actions = ReaderViewRightAction_None;
+  right_rows[0].actions = ReaderViewRightAction_EditNote;
+  build_input.frame_index += 1;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+        "non-Note rows cannot project the Note-only popup action");
+  right_rows[0].actions = ReaderViewRightAction_None;
+
+  projection = full_projection(settings, setting_choices, toc_rows,
+                               find_rows, right_rows);
+  projection.document_flags &= ~ReaderViewDocument_CanGoPreviousPage;
+  reader_view_state_reset_document(&state, projection.document_key);
+  layout_input.features = projection.features;
+  layout_input.document_flags = projection.document_flags;
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "disabled Previous layout resolves");
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.projection = &projection;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "disabled Previous base frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_PreviousPage, 0);
+  check(node != 0 &&
+        (node->flags & ReaderViewSemantic_Enabled) == 0 &&
+        (node->flags & ReaderViewSemantic_Focusable) != 0,
+        "disabled Previous remains non-enabled but focusable");
+  previous_id = node ? node->id : 0;
+  if (node)
+    check(reader_view_accessibility_focus(&state, node->id),
+          "disabled Previous focus queues");
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "disabled Previous focused frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_PreviousPage, 0);
+  icon = find_icon_for_source(&frame, previous_id);
+  command = find_draw_for_source(&frame, UI0DrawOp_FocusRing,
+                                 previous_id);
+  check(node != 0 && (node->flags & ReaderViewSemantic_Focused) != 0 &&
+        icon != 0 && icon->icon_kind == UI0IconKind_PageCaretLeft &&
+        rect_equal(icon->rect,
+                   ui0_rect(layout.previous_gutter_visual_rect.x + 13,
+                            layout.previous_gutter_visual_rect.y + 28,
+                            18, 32)) &&
+        icon->color == theme->colors[UI0ColorRole_TextMuted] &&
+        icon->stroke_color == theme->colors[UI0ColorRole_Surface] &&
+        count_draw_op_for_source(&frame, UI0DrawOp_FocusRing,
+                                 previous_id) == 1 &&
+        command != 0 &&
+        rect_equal(command->rect,
+                   ui0_rect(layout.previous_gutter_visual_rect.x - 2,
+                            layout.previous_gutter_visual_rect.y - 2,
+                            48, 92)) &&
+        rect_equal(command->clip_rect, layout.bounds) &&
+        command->corner_radius == 4 && command->stroke_width >= 1 &&
+        find_action(&frame, ReaderViewAction_PreviousPage) == 0,
+        "disabled focused Previous paints the exact caret/focus record "
+        "without invoking");
+  check(reader_view_accessibility_invoke(&state, previous_id),
+        "disabled Previous invoke request queues");
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame) &&
+        find_action(&frame, ReaderViewAction_PreviousPage) == 0,
+        "disabled Previous accessibility invoke stays non-invokable");
+  state.focus_id = 0;
+  state.focus_visible = 0;
+  frame_input.ui = ui0_input_pointer(
+    layout.previous_gutter_rect.x + layout.previous_gutter_rect.w / 2,
+    layout.previous_gutter_rect.y + layout.previous_gutter_rect.h / 2,
+    0, 0, 0);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame) &&
+        find_icon_for_source(&frame, previous_id) != 0 &&
+        find_action(&frame, ReaderViewAction_PreviousPage) == 0,
+        "disabled hovered Previous paints caret without invoking");
+  frame_input.ui = ui0_input_pointer(
+    layout.previous_gutter_rect.x + layout.previous_gutter_rect.w / 2,
+    layout.previous_gutter_rect.y + layout.previous_gutter_rect.h / 2,
+    1, 1, 0);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame) &&
+        state.focus_id == previous_id && !state.focus_visible &&
+        find_icon_for_source(&frame, previous_id) != 0 &&
+        find_icon_for_source(&frame, previous_id)->color ==
+          theme->colors[UI0ColorRole_TextSecondary] &&
+        find_action(&frame, ReaderViewAction_PreviousPage) == 0,
+        "disabled Previous pointer press keeps invisible focus and uses the "
+        "active caret color without invoking");
+  frame_input.ui = ui0_input_pointer(layout.page_surface_rect.x + 20,
+                                     layout.page_surface_rect.y + 20,
+                                     0, 0, 1);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame) &&
+        state.focus_id == previous_id && !state.focus_visible &&
+        find_action(&frame, ReaderViewAction_PreviousPage) == 0,
+        "disabled Previous retains invisible focus when release occurs "
+        "outside the gutter");
+  frame_input.ui = ui0_input_pointer(
+    layout.next_gutter_rect.x + layout.next_gutter_rect.w / 2,
+    layout.next_gutter_rect.y + layout.next_gutter_rect.h / 2,
+    0, 0, 0);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Next gutter exact-caret hover frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_NextPage, 0);
+  icon = node ? find_icon_for_source(&frame, node->id) : 0;
+  check(icon != 0 && icon->icon_kind == UI0IconKind_PageCaretRight &&
+        rect_equal(icon->rect,
+                   ui0_rect(layout.next_gutter_visual_rect.x + 13,
+                            layout.next_gutter_visual_rect.y + 28,
+                            18, 32)) &&
+        icon->color == theme->colors[UI0ColorRole_TextMuted] &&
+        icon->stroke_color == theme->colors[UI0ColorRole_Surface],
+        "Next gutter paints the exact mirrored PageCaret record");
+}
+
+static UI0B32
+lifecycle_build(ReaderViewState *state,
+                ReaderViewLayoutInput *layout_input,
+                ReaderViewLayout *layout,
+                ReaderViewProjection *projection,
+                ReaderViewInput *input,
+                const UI0ResolvedTheme *theme,
+                ReaderViewCodepointAdvance *advances,
+                ReaderViewFrameStorage *storage,
+                ReaderViewFrame *frame,
+                UI0U64 frame_index)
+{
+  ReaderViewBuildInput build_input;
+  layout_input->features = projection->features;
+  layout_input->document_flags = projection->document_flags;
+  if (!reader_view_resolve_layout(state, layout_input, layout)) return 0;
+  memset(&build_input, 0, sizeof(build_input));
+  build_input.frame_index = frame_index;
+  build_input.state = state;
+  build_input.layout = layout;
+  build_input.projection = projection;
+  build_input.input = input;
+  build_input.theme = theme;
+  build_input.find_text_metrics = test_find_text_metrics(advances);
+  return reader_view_build(&build_input, storage, frame);
+}
+
+static void
+test_focus_root_and_refresh_lifecycle(const UI0ResolvedTheme *theme)
+{
+  static ReaderViewState state;
+  static ReaderViewFrameStorage storage;
+  ReaderViewSettingControl settings[READER_VIEW_SETTING_CAP];
+  ReaderViewChoice choices[8];
+  ReaderViewTocRow toc_rows[2];
+  ReaderViewFindRow find_rows[1];
+  ReaderViewRightRow right_rows[1];
+  ReaderViewCodepointAdvance advances[127];
+  ReaderViewProjection projection = full_projection(
+    settings, choices, toc_rows, find_rows, right_rows);
+  ReaderViewLayoutInput layout_input;
+  ReaderViewLayout layout;
+  ReaderViewInput input;
+  ReaderViewFrame frame;
+  const ReaderViewSemanticNode *node;
+  const UI0ControlRecord *control;
+  const UI0SidenavRecord *sidenav;
+  UI0ID popup_focus;
+  UI0ID progress_id;
+  UI0U64 frame_index = 1;
+
+  memset(&layout_input, 0, sizeof(layout_input));
+  layout_input.bounds = ui0_rect(0, 0, 1400, 800);
+  memset(&input, 0, sizeof(input));
+  reader_view_state_reset_document(&state, projection.document_key);
+  state.left_panel = ReaderViewLeftPanel_Contents;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "refresh lifecycle Contents seed builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_TocRow, 20);
+  check(node && reader_view_accessibility_focus(&state, node->id),
+        "refresh lifecycle queues Contents row focus");
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "refresh lifecycle Contents focus builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_TocRow, 20);
+  control = node ? find_control_for_source(&storage, node->id) : 0;
+  sidenav = node ? find_reference_sidenav_record(&storage, node->id) : 0;
+  check(node && (node->flags & ReaderViewSemantic_Focused) != 0 &&
+        control && (control->state & UI0ControlState_Focused) != 0 &&
+        sidenav && (sidenav->state & UI0SidenavState_Focused) != 0,
+        "AT focus updates Contents semantic, control, and Sidenav records in one frame");
+  input.move_vertical_delta = 1;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "refresh lifecycle Contents arrow builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_TocRow, 21);
+  control = node ? find_control_for_source(&storage, node->id) : 0;
+  sidenav = node ? find_reference_sidenav_record(&storage, node->id) : 0;
+  check(node && (node->flags & ReaderViewSemantic_Focused) != 0 &&
+        control && (control->state & UI0ControlState_Focused) != 0 &&
+        sidenav && (sidenav->state & UI0SidenavState_Focused) != 0,
+        "arrow navigation repaints Contents focus in the same frame");
+  memset(&input, 0, sizeof(input));
+  state.active_toc_key = 21;
+  projection.toc.status.state = ReaderViewLoad_Loading;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "retained-row Loading Contents build");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_LeftContentsTab, 0);
+  check(node && (node->flags & ReaderViewSemantic_Focused) != 0 &&
+        state.active_toc_key == 0 && storage.scroll_records[0].id == 0 &&
+        (frame.change_flags & ReaderViewFrameChange_StateChanged) != 0 &&
+        (frame.change_flags & ReaderViewFrameChange_FocusChanged) != 0,
+        "Loading Contents retires rows, rehomes focus, and publishes no stale scroll root");
+
+  projection.toc.status = ready_status();
+  state.left_panel = ReaderViewLeftPanel_Find;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "refresh lifecycle Find seed builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindRow, 30);
+  check(node && reader_view_accessibility_focus(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "refresh lifecycle Find row focus builds");
+  state.active_find_key = 30;
+  projection.find.status.state = ReaderViewLoad_Empty;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "retained-row empty Find build");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindInput, 0);
+  check(node && (node->flags & ReaderViewSemantic_Focused) != 0 &&
+        state.active_find_key == 0 &&
+        find_semantic_control_source(
+          &frame, ReaderViewSemanticControl_FindRow, 30) == 0,
+        "empty Find retires row state and rehomes focus to the input");
+
+  projection.find.status = ready_status();
+  state.left_panel = ReaderViewLeftPanel_None;
+  state.right_panel_open = 1;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "refresh lifecycle Annotations seed builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRow, 40);
+  check(node && reader_view_accessibility_focus(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "refresh lifecycle Annotations row focus builds");
+  state.active_right_key = 40;
+  projection.right.status.state = ReaderViewLoad_Loading;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "retained-row Loading Annotations build");
+  check(state.focus_id == 0 && state.active_right_key == 0 &&
+        find_semantic_control_source(
+          &frame, ReaderViewSemanticControl_RightRow, 40) == 0,
+        "Loading Annotations retires vanished row interaction state");
+
+  projection.right.status = ready_status();
+  state.left_panel = ReaderViewLeftPanel_Find;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "AT-only popup seed builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilter, 0);
+  check(node && reader_view_accessibility_invoke(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "AT-only filter trigger opens");
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "AT-only filter popup contained-focus build");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilterOption,
+    (ReaderViewKey)ReaderViewRightFilter_All);
+  popup_focus = node ? node->id : 0;
+  check(node && (node->flags & ReaderViewSemantic_Focused) != 0 &&
+        state.focus_id == popup_focus && state.focus_visible,
+        "AT-only filter invocation enters a visible contained option");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindInput, 0);
+  check(node && reader_view_accessibility_focus(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "blocked Find accessibility request is consumed");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindInput, 0);
+  check(state.focus_id == popup_focus &&
+        state.pending_accessibility_focus_id == 0 && node &&
+        (node->flags & (ReaderViewSemantic_Focusable |
+                        ReaderViewSemantic_Focused)) == 0,
+        "popup blocks Find input focus and semantics without deferred replay");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_Progress, 0);
+  progress_id = node ? node->id : 0;
+  check(node && reader_view_accessibility_focus(&state, progress_id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "blocked progress accessibility request is consumed");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_Progress, 0);
+  check(state.focus_id == popup_focus && node &&
+        (node->flags & (ReaderViewSemantic_Focusable |
+                        ReaderViewSemantic_Focused)) == 0,
+        "popup blocks progress focus and background slider semantics");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_PreviousPage, 0);
+  check(node && (node->flags & (ReaderViewSemantic_Focusable |
+                                ReaderViewSemantic_Focused)) == 0,
+        "popup blocks side-gutter focus semantics");
+  input.escape_pressed = 1;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "filter Escape close build");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilter, 0);
+  check(state.popup == ReaderViewPopup_None && node &&
+        (node->flags & (ReaderViewSemantic_Enabled |
+                        ReaderViewSemantic_Focusable |
+                        ReaderViewSemantic_Focused)) ==
+          (ReaderViewSemantic_Enabled | ReaderViewSemantic_Focusable |
+           ReaderViewSemantic_Focused) &&
+        (frame.change_flags & ReaderViewFrameChange_FocusChanged) != 0,
+        "popup Escape restores a same-frame focusable trigger");
+
+  memset(&input, 0, sizeof(input));
+  reader_view_state_reset_document(&state, projection.document_key);
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "setting AT-only seed builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FontFamily, 0);
+  check(node && reader_view_accessibility_invoke(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "setting AT-only popup opens with contained focus");
+  node = find_semantic_role(&frame, "Serif", ReaderViewSemantic_MenuItem);
+  check(node && (node->flags & ReaderViewSemantic_Focused) != 0 &&
+        reader_view_accessibility_invoke(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "setting choice invocation closes through shared restoration");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FontFamily, 0);
+  check(state.popup == ReaderViewPopup_None && state.restore_focus_id == 0 &&
+        node && (node->flags & ReaderViewSemantic_Focused) != 0,
+        "setting choice restores its exact trigger in the close frame");
+}
+
+static void
+test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
+{
+  static ReaderViewState state;
+  static ReaderViewFrameStorage storage;
+  ReaderViewSettingControl settings[READER_VIEW_SETTING_CAP];
+  ReaderViewChoice choices[8];
+  ReaderViewTocRow toc_seed[2];
+  ReaderViewFindRow find_seed[1];
+  ReaderViewRightRow right_seed[1];
+  ReaderViewCodepointAdvance advances[127];
+  ReaderViewProjection projection = full_projection(
+    settings, choices, toc_seed, find_seed, right_seed);
+  ReaderViewFeatureFlags all_features = projection.features;
+  ReaderViewLayoutInput layout_input;
+  ReaderViewLayout layout;
+  ReaderViewInput input;
+  ReaderViewFrame frame;
+  const ReaderViewAction *action;
+  const ReaderViewSemanticNode *node;
+  UI0ID restore_focus;
+  UI0U64 frame_index = 1000;
+  char note_text[101];
+
+  memset(&layout_input, 0, sizeof(layout_input));
+  layout_input.bounds = ui0_rect(0, 0, 1400, 800);
+  memset(&input, 0, sizeof(input));
+  reader_view_state_reset_document(&state, projection.document_key);
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "modal lifecycle seed builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_Progress, 0);
+  restore_focus = node ? node->id : 0;
+  check(node && reader_view_accessibility_focus(&state, restore_focus) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "modal lifecycle progress focus builds");
+  memset(&projection.selection, 0, sizeof(projection.selection));
+  projection.selection.status.state = ReaderViewLoad_Loading;
+  projection.selection.selection_key = 50;
+  projection.selection.flags = ReaderViewSelection_Active |
+                               ReaderViewSelection_CanEditNote;
+  check(!reader_view_open_note_editor(&state, &projection.selection),
+        "public note editor rejects a non-ready selection");
+  memset(note_text, 'n', sizeof(note_text) - 1);
+  note_text[sizeof(note_text) - 1] = 0;
+  projection.selection.status = ready_status();
+  projection.selection.revision = 7;
+  projection.selection.note_text.data = note_text;
+  projection.selection.note_text.size = 100;
+  projection.selection.flags |= ReaderViewSelection_CanDeleteNote;
+  check(reader_view_open_note_editor(&state, &projection.selection) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "public note editor enters the modal root");
+  node = find_semantic_role(&frame, note_text, ReaderViewSemantic_TextArea);
+  check(node && (node->flags & ReaderViewSemantic_Focused) != 0 &&
+        state.focus_id == node->id,
+        "note modal moves focus into its text area");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_Progress, 0);
+  check(node && (node->flags & (ReaderViewSemantic_Focusable |
+                                ReaderViewSemantic_Focused)) == 0,
+        "note modal suppresses blocked progress semantics");
+  input.note_text.move_vertical_delta = -1;
+  input.move_vertical_delta = -1;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.note_input.caret == 60,
+        "note vertical movement is applied once when host deltas mirror");
+  memset(&input, 0, sizeof(input));
+  node = find_semantic(&frame, "Cancel");
+  check(node && reader_view_accessibility_focus(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "note Cancel focus builds");
+  input.note_text.text = "X";
+  input.note_text.text_len = 1;
+  input.note_text.undo_pressed = 1;
+  input.note_text.delete_pressed = 1;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        reader_view_note_draft(&state).size == 100,
+        "button-focused note edit commands cannot mutate the draft");
+  memset(&input, 0, sizeof(input));
+  projection.selection.revision = 8;
+  check(!lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                         theme, advances, &storage, &frame, frame_index++) &&
+        (frame.error_flags & ReaderViewFrameError_StaleNoteRevision) != 0,
+        "stale note revision build");
+  node = find_semantic(&frame, "Delete");
+  check(node && (node->flags & ReaderViewSemantic_Enabled) == 0 &&
+        reader_view_accessibility_invoke(&state, node->id) &&
+        !lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                         theme, advances, &storage, &frame, frame_index++) &&
+        find_action(&frame, ReaderViewAction_DeleteNote) == 0,
+        "stale note revision disables Delete and consumes its AT invoke");
+
+  projection.selection.revision = 7;
+  memset(&input, 0, sizeof(input));
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "matching note revision restores an eligible modal");
+  node = find_semantic_role(&frame, note_text,
+                            ReaderViewSemantic_TextArea);
+  check(node && reader_view_accessibility_focus(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "matching note text area focus builds");
+  input.note_text.text = "X";
+  input.note_text.text_len = 1;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.note_dirty && reader_view_note_draft(&state).size == 101,
+        "matching note edit creates a retryable dirty draft");
+  memset(&input, 0, sizeof(input));
+  node = find_semantic(&frame, "Save note");
+  check(node && reader_view_accessibility_invoke(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "matching dirty note Save invocation builds");
+  action = find_action(&frame, ReaderViewAction_SaveNote);
+  check(action && action->key == projection.selection.selection_key &&
+        action->value == projection.selection.revision &&
+        action->text.size == 101 &&
+        state.popup == ReaderViewPopup_NoteEditor && state.note_dirty &&
+        reader_view_note_draft(&state).size == 101,
+        "Save emits once while the unacknowledged modal and draft remain");
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        find_action(&frame, ReaderViewAction_SaveNote) == 0 &&
+        state.popup == ReaderViewPopup_NoteEditor && state.note_dirty &&
+        reader_view_note_draft(&state).size == 101,
+        "failed host persistence leaves the note modal available for retry");
+  check(reader_view_close_note_editor(&state) &&
+        state.popup == ReaderViewPopup_None &&
+        state.restore_focus_id == 0 && state.focus_id == restore_focus &&
+        !state.note_dirty && state.hot_id == 0 && state.active_id == 0 &&
+        state.pending_accessibility_focus_id == 0 &&
+        state.pending_accessibility_invoke_id == 0,
+        "successful host Save acknowledgement restores focus and retires "
+        "modal state");
+
+  memset(&input, 0, sizeof(input));
+  check(reader_view_open_note_editor(&state, &projection.selection) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "matching note editor reopens for Delete acknowledgement lifecycle");
+  node = find_semantic_role(&frame, note_text, ReaderViewSemantic_TextArea);
+  check(node && reader_view_accessibility_focus(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "Delete lifecycle note text area focus builds");
+  input.note_text.text = "Y";
+  input.note_text.text_len = 1;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.note_dirty && reader_view_note_draft(&state).size == 101,
+        "Delete lifecycle creates a retryable dirty draft");
+  memset(&input, 0, sizeof(input));
+  node = find_semantic(&frame, "Delete");
+  check(node && reader_view_accessibility_invoke(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "matching dirty note Delete invocation builds");
+  action = find_action(&frame, ReaderViewAction_DeleteNote);
+  check(action && action->key == projection.selection.selection_key &&
+        action->value == projection.selection.revision &&
+        state.popup == ReaderViewPopup_NoteEditor && state.note_dirty &&
+        reader_view_note_draft(&state).size == 101,
+        "Delete emits once while the unacknowledged modal and draft remain");
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        find_action(&frame, ReaderViewAction_DeleteNote) == 0 &&
+        state.popup == ReaderViewPopup_NoteEditor && state.note_dirty &&
+        reader_view_note_draft(&state).size == 101,
+        "failed host Delete persistence leaves the note modal available for "
+        "retry");
+  check(reader_view_close_note_editor(&state) &&
+        state.popup == ReaderViewPopup_None &&
+        state.restore_focus_id == 0 && state.focus_id == restore_focus &&
+        !state.note_dirty && state.hot_id == 0 && state.active_id == 0 &&
+        state.pending_accessibility_focus_id == 0 &&
+        state.pending_accessibility_invoke_id == 0,
+        "successful host Delete acknowledgement restores focus and retires "
+        "modal state");
+
+  {
+    ReaderViewBuildInput bad_build;
+    ReaderViewKey second_toc_key;
+    ReaderViewKey document_key;
+    projection = full_projection(settings, choices, toc_seed,
+                                 find_seed, right_seed);
+    all_features = projection.features;
+    reader_view_state_reset_document(&state, projection.document_key);
+    memset(&input, 0, sizeof(input));
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "failed-build AT projection seed builds");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_Contents, 0);
+    second_toc_key = toc_seed[1].key;
+    check(node && reader_view_accessibility_invoke(&state, node->id),
+          "projection-invalid build queues an AT invoke");
+    toc_seed[1].key = toc_seed[0].key;
+    check(!lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                           theme, advances, &storage, &frame, frame_index++) &&
+          (frame.change_flags &
+           ReaderViewFrameChange_ProjectionInvalid) != 0 &&
+          state.pending_accessibility_invoke_id == 0,
+          "projection-invalid build consumes its one-shot AT invoke");
+    toc_seed[1].key = second_toc_key;
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.left_panel == ReaderViewLeftPanel_None &&
+          frame.action_count == 0,
+          "repaired projection cannot replay a failed-build AT invoke");
+
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_Find, 0);
+    check(node && reader_view_accessibility_invoke(&state, node->id),
+          "bad-metrics build queues an AT invoke");
+    memset(&bad_build, 0, sizeof(bad_build));
+    bad_build.frame_index = frame_index++;
+    bad_build.state = &state;
+    bad_build.layout = &layout;
+    bad_build.projection = &projection;
+    bad_build.input = &input;
+    bad_build.theme = theme;
+    bad_build.find_text_metrics = test_find_text_metrics(advances);
+    bad_build.find_text_metrics.fallback_advance = 0;
+    check(!reader_view_build(&bad_build, &storage, &frame) &&
+          (frame.error_flags & ReaderViewFrameError_BadInput) != 0 &&
+          state.pending_accessibility_invoke_id == 0,
+          "bad Find metrics consume their one-shot AT invoke");
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.left_panel == ReaderViewLeftPanel_None &&
+          frame.action_count == 0,
+          "repaired Find metrics cannot replay a failed-build AT invoke");
+
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_Bookmark, 0);
+    check(node && reader_view_accessibility_invoke(&state, node->id),
+          "stale-document build queues an AT invoke");
+    document_key = projection.document_key;
+    projection.document_key = document_key + 1;
+    check(!lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                           theme, advances, &storage, &frame, frame_index++) &&
+          (frame.error_flags &
+           ReaderViewFrameError_StaleDocumentState) != 0 &&
+          state.pending_accessibility_invoke_id == 0,
+          "stale-document build consumes its one-shot AT invoke");
+    projection.document_key = document_key;
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          find_action(&frame, ReaderViewAction_ToggleBookmark) == 0,
+          "repaired document identity cannot replay a failed-build invoke");
+  }
+
+  reader_view_state_reset_document(&state, projection.document_key);
+  state.left_panel = ReaderViewLeftPanel_Find;
+  projection.selection.status = ready_status();
+  projection.selection.flags = 0;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "feature-withdrawal Find seed builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_Find, 0);
+  check(node && reader_view_accessibility_invoke(&state, node->id),
+        "disappearing Find control accepts a one-build AT request");
+  projection.features &= ~ReaderViewFeature_Find;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.left_panel == ReaderViewLeftPanel_None &&
+        state.pending_accessibility_invoke_id == 0 &&
+        (frame.change_flags & ReaderViewFrameChange_LayoutChanged) != 0,
+        "Find feature withdrawal closes its panel and consumes the request");
+  projection.features |= ReaderViewFeature_Find;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.left_panel == ReaderViewLeftPanel_None,
+        "restored Find feature does not replay a stale AT invoke");
+  state.right_panel_open = 1;
+  projection.features &= ~ReaderViewFeature_Annotations;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        !state.right_panel_open,
+        "Annotations feature withdrawal closes its host-owned panel state");
+
+  {
+    static const struct
+    {
+      ReaderViewFeatureFlags feature;
+      ReaderViewSemanticControl control;
+      const char *name;
+    } cases[] = {
+      { ReaderViewFeature_Contents,
+        ReaderViewSemanticControl_Contents,
+        "direct-focused Contents trigger withdrawal" },
+      { ReaderViewFeature_Find,
+        ReaderViewSemanticControl_Find,
+        "direct-focused Find trigger withdrawal" },
+      { ReaderViewFeature_History,
+        ReaderViewSemanticControl_HistoryBack,
+        "direct-focused History trigger withdrawal" },
+      { ReaderViewFeature_Fullscreen,
+        ReaderViewSemanticControl_Fullscreen,
+        "direct-focused Fullscreen trigger withdrawal" },
+      { ReaderViewFeature_ReadingSettings,
+        ReaderViewSemanticControl_FontFamily,
+        "direct-focused setting trigger withdrawal" },
+      { ReaderViewFeature_Annotations,
+        ReaderViewSemanticControl_Annotations,
+        "direct-focused Annotations trigger withdrawal" },
+      { ReaderViewFeature_Bookmark,
+        ReaderViewSemanticControl_Bookmark,
+        "direct-focused Bookmark trigger withdrawal" },
+      { ReaderViewFeature_Paging,
+        ReaderViewSemanticControl_PreviousPage,
+        "direct-focused Previous gutter withdrawal" },
+      { ReaderViewFeature_Progress,
+        ReaderViewSemanticControl_Progress,
+        "direct-focused progress withdrawal" },
+    };
+    UI0S32 case_index;
+    for (case_index = 0;
+         case_index < (UI0S32)(sizeof(cases) / sizeof(cases[0]));
+         ++case_index)
+    {
+      projection.features = all_features;
+      reader_view_state_reset_document(&state, projection.document_key);
+      memset(&input, 0, sizeof(input));
+      check(lifecycle_build(&state, &layout_input, &layout, &projection,
+                            &input, theme, advances, &storage, &frame,
+                            frame_index++),
+            cases[case_index].name);
+      node = find_semantic_control_source(
+        &frame, cases[case_index].control, 0);
+      check(node && reader_view_accessibility_focus(&state, node->id) &&
+            lifecycle_build(&state, &layout_input, &layout, &projection,
+                            &input, theme, advances, &storage, &frame,
+                            frame_index++),
+            cases[case_index].name);
+      node = find_semantic_control_source(
+        &frame, cases[case_index].control, 0);
+      if (node)
+      {
+        state.hot_id = node->id;
+        state.active_id = node->id;
+        state.pending_accessibility_focus_id = node->id;
+        state.pending_accessibility_invoke_id = node->id;
+      }
+      projection.features &= ~cases[case_index].feature;
+      check(lifecycle_build(&state, &layout_input, &layout, &projection,
+                            &input, theme, advances, &storage, &frame,
+                            frame_index++) &&
+            state.focus_id == 0 && !state.focus_visible &&
+            state.hot_id == 0 && state.active_id == 0 &&
+            state.pending_accessibility_focus_id == 0 &&
+            state.pending_accessibility_invoke_id == 0 &&
+            find_semantic_control_source(
+              &frame, cases[case_index].control, 0) == 0 &&
+            frame.action_count == 0,
+            cases[case_index].name);
+    }
+
+    projection.features = all_features & ~ReaderViewFeature_Fullscreen;
+    reader_view_state_reset_document(&state, projection.document_key);
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "direct-focused distraction trigger seed builds");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_DistractionFree, 0);
+    check(node && reader_view_accessibility_focus(&state, node->id) &&
+          lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "direct-focused distraction trigger focus builds");
+    projection.features &= ~ReaderViewFeature_DistractionFree;
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.focus_id == 0 && !state.focus_visible,
+          "direct-focused distraction trigger withdrawal clears focus");
+
+    projection.features = all_features;
+    reader_view_state_reset_document(&state, projection.document_key);
+    state.right_panel_open = 1;
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "direct-focused Export trigger seed builds");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightExport, 0);
+    check(node && reader_view_accessibility_focus(&state, node->id) &&
+          lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "direct-focused Export trigger focus builds");
+    projection.features &= ~ReaderViewFeature_Export;
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.focus_id == 0 && !state.focus_visible,
+          "direct-focused Export trigger withdrawal clears focus");
+  }
+
+  projection.features = all_features;
+  reader_view_state_reset_document(&state, projection.document_key);
+  memset(&input, 0, sizeof(input));
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "natural Contents open seed builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_Contents, 0);
+  check(node && reader_view_accessibility_invoke(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.left_panel == ReaderViewLeftPanel_Contents &&
+        state.left_panel_restore_focus_id != 0 && state.focus_id != 0,
+        "natural Contents open captures trigger and focuses its row");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_TocRow, toc_seed[0].key);
+  check(node && (node->flags & ReaderViewSemantic_Focused) != 0 &&
+        state.pending_left_panel_focus == ReaderViewLeftPanel_None,
+        "next-layout Contents frame hands focus from trigger to TOC row");
+  projection.features &= ~ReaderViewFeature_Contents;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.left_panel == ReaderViewLeftPanel_None &&
+        state.left_panel_restore_focus_id == 0 && state.focus_id == 0 &&
+        !state.focus_visible,
+        "Contents withdrawal cannot restore focus to its vanished trigger");
+
+  projection.features = all_features;
+  reader_view_state_reset_document(&state, projection.document_key);
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "natural Find open seed builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_Find, 0);
+  check(node && reader_view_accessibility_invoke(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.left_panel == ReaderViewLeftPanel_Find &&
+        state.left_panel_restore_focus_id != 0 && state.focus_id != 0,
+        "natural Find open captures trigger and focuses its input");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindInput, 0);
+  check(node && (node->flags & ReaderViewSemantic_Focused) != 0 &&
+        state.pending_left_panel_focus == ReaderViewLeftPanel_None,
+        "next-layout Find frame hands focus from trigger to its input");
+  projection.features &= ~ReaderViewFeature_Find;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.left_panel == ReaderViewLeftPanel_None &&
+        state.left_panel_restore_focus_id == 0 && state.focus_id == 0 &&
+        !state.focus_visible,
+        "Find withdrawal cannot restore focus to its vanished trigger");
+
+  projection.features = all_features;
+  reader_view_state_reset_document(&state, projection.document_key);
+  memset(&input, 0, sizeof(input));
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "pending Contents Escape seed builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_Contents, 0);
+  check(node && reader_view_accessibility_invoke(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.pending_left_panel_focus == ReaderViewLeftPanel_Contents,
+        "new Contents layout retains a bounded deferred-focus handoff");
+  input.escape_pressed = 1;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.left_panel == ReaderViewLeftPanel_None &&
+        state.pending_left_panel_focus == ReaderViewLeftPanel_None,
+        "Escape clears a not-yet-published left-panel focus handoff");
+  memset(&input, 0, sizeof(input));
+
+  projection.features = all_features;
+  reader_view_state_reset_document(&state, projection.document_key);
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "natural Annotations open seed builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_Annotations, 0);
+  check(node && reader_view_accessibility_invoke(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.right_panel_open && state.right_panel_restore_focus_id != 0,
+        "natural Annotations open captures its trigger");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRow, right_seed[0].key);
+  check(node && reader_view_accessibility_focus(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "natural Annotations row focus builds");
+  projection.features &= ~ReaderViewFeature_Annotations;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        !state.right_panel_open &&
+        state.right_panel_restore_focus_id == 0 && state.focus_id == 0 &&
+        !state.focus_visible,
+        "Annotations withdrawal cannot restore focus to its vanished trigger");
+
+  projection.features = all_features;
+  reader_view_state_reset_document(&state, projection.document_key);
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "natural setting popup seed builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FontFamily, 0);
+  check(node && reader_view_accessibility_invoke(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.popup == ReaderViewPopup_SettingMenu && state.focus_id != 0,
+        "natural setting popup contains focus");
+  projection.features &= ~ReaderViewFeature_ReadingSettings;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.popup == ReaderViewPopup_None &&
+        state.restore_focus_id == 0 && state.focus_id == 0 &&
+        !state.focus_visible,
+        "setting owner withdrawal cannot restore a vanished trigger");
+
+  projection.features = all_features;
+  reader_view_state_reset_document(&state, projection.document_key);
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "natural filter popup Annotations seed builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_Annotations, 0);
+  check(node && reader_view_accessibility_invoke(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "natural filter popup opens Annotations");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilter, 0);
+  check(node && reader_view_accessibility_invoke(&state, node->id) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        state.popup == ReaderViewPopup_RightFilter && state.focus_id != 0,
+        "natural Annotations filter popup contains focus");
+  projection.features &= ~ReaderViewFeature_Annotations;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        !state.right_panel_open && state.popup == ReaderViewPopup_None &&
+        state.restore_focus_id == 0 && state.focus_id == 0 &&
+        !state.focus_visible,
+        "filter owner withdrawal cannot restore vanished panel/toolbar "
+        "triggers");
+
+  {
+    static ReaderViewTocRow long_toc[32];
+    UI0S32 index;
+    UI0S32 retained_scroll;
+    UI0Rect track;
+    UI0Rect thumb;
+    for (index = 0; index < 32; ++index)
+    {
+      memset(long_toc + index, 0, sizeof(long_toc[index]));
+      long_toc[index].key = 1000 + (ReaderViewKey)index;
+      long_toc[index].label.data = "Row";
+      long_toc[index].label.size = 3;
+      long_toc[index].flags = ReaderViewRow_Enabled;
+    }
+    projection.features |= ReaderViewFeature_Annotations;
+    projection.toc.rows = long_toc;
+    projection.toc.row_count = 32;
+    projection.toc.total_count = 32;
+    projection.toc.status = ready_status();
+    reader_view_state_reset_document(&state, projection.document_key);
+    state.left_panel = ReaderViewLeftPanel_Contents;
+    memset(&input, 0, sizeof(input));
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "single-delta Contents scroll seed builds");
+    input.ui.pointer_x = layout.left_panel_rect.x + 100;
+    input.ui.pointer_y = layout.left_panel_rect.y + 180;
+    input.ui.wheel_delta_y = 17;
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.toc_scroll_y == 17 &&
+          (frame.change_flags & ReaderViewFrameChange_StateChanged) != 0,
+          "Contents wheel delta applies exactly once and reports state change");
+    track = storage.scroll_records[0].track_rect;
+    memset(&input, 0, sizeof(input));
+    input.ui.pointer_x = track.x + track.w / 2;
+    input.ui.pointer_y = track.y + track.h / 2;
+    input.ui.flags = UI0Input_PointerPressed | UI0Input_PointerDown;
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          find_action(&frame, ReaderViewAction_ActivateTocRow) == 0,
+          "Contents scrollbar press cannot leak into an overlapping row action");
+    input.ui = ui0_input_pointer(track.x + track.w / 2,
+                                 track.y + track.h / 2,
+                                 0, 0, 1);
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          find_action(&frame, ReaderViewAction_ActivateTocRow) == 0,
+          "Contents scrollbar release cannot activate an overlapping row");
+
+    memset(&input, 0, sizeof(input));
+    state.toc_scroll_y = 0;
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "wheel-hidden Contents focus seed builds");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_TocRow, 1000);
+    check(node && reader_view_accessibility_focus(&state, node->id) &&
+          lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "wheel-hidden Contents row focus builds");
+    track = storage.scroll_records[0].viewport_rect;
+    input.ui = ui0_input_pointer_wheel(
+      track.x + track.w / 2, track.y + track.h / 2,
+      0, 0, 0, 0, 1000);
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.focus_id == 0 && !state.focus_visible,
+          "large Contents wheel retires focus when its row leaves publication");
+    projection.toc.rows = long_toc + 1;
+    projection.toc.row_count = 31;
+    projection.toc.total_count = 31;
+    memset(&input, 0, sizeof(input));
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.focus_id == 0 &&
+          find_semantic_control_source(
+            &frame, ReaderViewSemanticControl_TocRow, 1000) == 0,
+          "removing a wheel-hidden Contents row cannot leave stale focus");
+    projection.toc.rows = long_toc;
+    projection.toc.row_count = 32;
+    projection.toc.total_count = 32;
+
+    memset(&input, 0, sizeof(input));
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "Contents thumb-owner reset seed builds");
+    thumb = storage.scroll_records[0].thumb_rect;
+    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
+                                 thumb.y + thumb.h / 2,
+                                 1, 1, 0);
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.toc_scroll.active_thumb_id != 0,
+          "Contents thumb press owns its bounded drag state");
+    retained_scroll = state.toc_scroll_y;
+    projection.toc.status.state = ReaderViewLoad_Loading;
+    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
+                                 thumb.y + thumb.h / 2 + 40,
+                                 1, 0, 0);
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.toc_scroll.active_thumb_id == 0 &&
+          state.toc_scroll.drag_start_pointer_y == 0 &&
+          state.toc_scroll.drag_start_scroll_y == 0 &&
+          state.toc_scroll_y == retained_scroll,
+          "Loading Contents retires thumb drag ownership but keeps scroll");
+    projection.toc.status = ready_status();
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.toc_scroll.active_thumb_id == 0 &&
+          state.toc_scroll_y == retained_scroll,
+          "ready Contents cannot resume a drag without a new press");
+  }
+
+  {
+    static ReaderViewFindRow long_find[16];
+    const UI0ScrollRecord *scroll;
+    const UI0ControlRecord *row_control;
+    const UI0ControlRecord *section_control;
+    const UI0ControlRecord *excerpt_control;
+    const UI0DrawCommand *section_draw;
+    const UI0DrawCommand *excerpt_draw;
+    UI0Rect content_clip;
+    UI0Rect thumb;
+    UI0S32 index;
+    UI0S32 retained_scroll;
+    for (index = 0; index < 16; ++index)
+    {
+      memset(long_find + index, 0, sizeof(long_find[index]));
+      long_find[index].key = 2000 + (ReaderViewKey)index;
+      long_find[index].section.data = index == 0 ? "F0" : "F";
+      long_find[index].section.size = index == 0 ? 2 : 1;
+      long_find[index].excerpt.data =
+        index == 0 ? "Excerpt zero" : "Excerpt";
+      long_find[index].excerpt.size = index == 0 ? 12 : 7;
+      long_find[index].flags = ReaderViewRow_Enabled;
+    }
+    projection.features = all_features;
+    projection.find.rows = long_find;
+    projection.find.row_count = 16;
+    projection.find.total_count = 16;
+    projection.find.active_index = -1;
+    projection.find.status = ready_status();
+    reader_view_state_reset_document(&state, projection.document_key);
+    state.left_panel = ReaderViewLeftPanel_Find;
+    state.find_scroll_y = 0;
+    memset(&input, 0, sizeof(input));
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "long Find scroll seed frame builds");
+    scroll = find_scroll_record_on_side(
+      &storage, layout.bounds.x + layout.bounds.w / 2, 0);
+    if (scroll)
+      input.ui = ui0_input_pointer_wheel(
+        scroll->viewport_rect.x + scroll->viewport_rect.w / 2,
+        scroll->viewport_rect.y + scroll->viewport_rect.h / 2,
+        0, 0, 0, 0, 17);
+    check(scroll && lifecycle_build(
+            &state, &layout_input, &layout, &projection, &input,
+            theme, advances, &storage, &frame, frame_index++) &&
+          state.find_scroll_y == 17 &&
+          (frame.change_flags & ReaderViewFrameChange_StateChanged) != 0,
+          "Find wheel delta applies exactly once and reports state change");
+    scroll = find_scroll_record_on_side(
+      &storage, layout.bounds.x + layout.bounds.w / 2, 0);
+    content_clip = scroll ? scroll->viewport_rect : ui0_rect(0, 0, 0, 0);
+    if (scroll)
+      content_clip.w = scroll->track_rect.x - content_clip.x;
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_FindRow, 2000);
+    row_control = node ? find_control_for_source(&storage, node->id) : 0;
+    node = find_semantic_role(&frame, "F0", ReaderViewSemantic_Group);
+    section_control = node ? find_control_for_source(&storage, node->id) : 0;
+    section_draw = node ? find_draw_for_source(
+      &frame, UI0DrawOp_Text, node->id) : 0;
+    node = find_semantic_role(&frame, "Excerpt zero",
+                              ReaderViewSemantic_Group);
+    excerpt_control = node ? find_control_for_source(&storage, node->id) : 0;
+    excerpt_draw = node ? find_draw_for_source(
+      &frame, UI0DrawOp_Text, node->id) : 0;
+    check(scroll && row_control && section_control && excerpt_control &&
+          section_draw && excerpt_draw &&
+          row_control->clip_rect.h > 0 &&
+          row_control->clip_rect.h < row_control->rect.h &&
+          section_control->clip_rect.h > 0 &&
+          section_control->clip_rect.h < section_control->rect.h &&
+          rect_within(row_control->clip_rect, content_clip) &&
+          rect_within(section_control->clip_rect, content_clip) &&
+          rect_within(excerpt_control->clip_rect, content_clip) &&
+          rect_within(section_draw->clip_rect, content_clip) &&
+          rect_within(excerpt_draw->clip_rect, content_clip),
+          "partial Find row and child paint/control clips exclude its track");
+    if (scroll)
+      input.ui = ui0_input_pointer(
+        scroll->track_rect.x + scroll->track_rect.w / 2,
+        scroll->track_rect.y + scroll->track_rect.h / 2,
+        1, 1, 0);
+    check(scroll && lifecycle_build(
+            &state, &layout_input, &layout, &projection, &input,
+            theme, advances, &storage, &frame, frame_index++) &&
+          find_action(&frame, ReaderViewAction_ActivateFindRow) == 0 &&
+          find_action(&frame, ReaderViewAction_FindChanged) == 0 &&
+          find_action(&frame, ReaderViewAction_FindCommitted) == 0,
+          "Find scrollbar press cannot leak into row/input actions");
+    if (scroll)
+      input.ui = ui0_input_pointer(
+        scroll->track_rect.x + scroll->track_rect.w / 2,
+        scroll->track_rect.y + scroll->track_rect.h / 2,
+        0, 0, 1);
+    check(scroll && lifecycle_build(
+            &state, &layout_input, &layout, &projection, &input,
+            theme, advances, &storage, &frame, frame_index++) &&
+          find_action(&frame, ReaderViewAction_ActivateFindRow) == 0 &&
+          find_action(&frame, ReaderViewAction_FindChanged) == 0 &&
+          find_action(&frame, ReaderViewAction_FindCommitted) == 0,
+          "Find scrollbar release cannot activate a row/input action");
+
+    memset(&input, 0, sizeof(input));
+    state.find_scroll_y = 0;
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "wheel-hidden Find focus seed builds");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_FindRow, 2000);
+    check(node && reader_view_accessibility_focus(&state, node->id) &&
+          lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "wheel-hidden Find row focus builds");
+    scroll = find_scroll_record_on_side(
+      &storage, layout.bounds.x + layout.bounds.w / 2, 0);
+    if (scroll)
+      input.ui = ui0_input_pointer_wheel(
+        scroll->viewport_rect.x + scroll->viewport_rect.w / 2,
+        scroll->viewport_rect.y + scroll->viewport_rect.h / 2,
+        0, 0, 0, 0, 1000);
+    check(scroll && lifecycle_build(
+            &state, &layout_input, &layout, &projection, &input,
+            theme, advances, &storage, &frame, frame_index++) &&
+          state.focus_id == 0 && !state.focus_visible,
+          "large Find wheel retires focus when its row leaves publication");
+    projection.find.rows = long_find + 1;
+    projection.find.row_count = 15;
+    projection.find.total_count = 15;
+    memset(&input, 0, sizeof(input));
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.focus_id == 0 &&
+          find_semantic_control_source(
+            &frame, ReaderViewSemanticControl_FindRow, 2000) == 0,
+          "removing a wheel-hidden Find row cannot leave stale focus");
+    projection.find.rows = long_find;
+    projection.find.row_count = 16;
+    projection.find.total_count = 16;
+
+    memset(&input, 0, sizeof(input));
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "Find thumb-owner reset seed builds");
+    scroll = find_scroll_record_on_side(
+      &storage, layout.bounds.x + layout.bounds.w / 2, 0);
+    thumb = scroll ? scroll->thumb_rect : ui0_rect(0, 0, 0, 0);
+    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
+                                 thumb.y + thumb.h / 2,
+                                 1, 1, 0);
+    check(scroll && lifecycle_build(
+            &state, &layout_input, &layout, &projection, &input,
+            theme, advances, &storage, &frame, frame_index++) &&
+          state.find_scroll.active_thumb_id != 0,
+          "Find thumb press owns its bounded drag state");
+    retained_scroll = state.find_scroll_y;
+    projection.find.status.state = ReaderViewLoad_Loading;
+    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
+                                 thumb.y + thumb.h / 2 + 40,
+                                 1, 0, 0);
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.find_scroll.active_thumb_id == 0 &&
+          state.find_scroll.drag_start_pointer_y == 0 &&
+          state.find_scroll.drag_start_scroll_y == 0 &&
+          state.find_scroll_y == retained_scroll,
+          "Loading Find retires thumb drag ownership but keeps scroll");
+    projection.find.status = ready_status();
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.find_scroll.active_thumb_id == 0 &&
+          state.find_scroll_y == retained_scroll,
+          "ready Find cannot resume a drag without a new press");
+
+    memset(&input, 0, sizeof(input));
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "Find immediate-close thumb seed builds");
+    scroll = find_scroll_record_on_side(
+      &storage, layout.bounds.x + layout.bounds.w / 2, 0);
+    thumb = scroll ? scroll->thumb_rect : ui0_rect(0, 0, 0, 0);
+    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
+                                 thumb.y + thumb.h / 2,
+                                 1, 1, 0);
+    check(scroll && lifecycle_build(
+            &state, &layout_input, &layout, &projection, &input,
+            theme, advances, &storage, &frame, frame_index++) &&
+          state.find_scroll.active_thumb_id != 0,
+          "Find immediate-close thumb press owns drag state");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_LeftPanelClose, 0);
+    check(node && reader_view_accessibility_invoke(&state, node->id),
+          "Find close queues while its thumb is active");
+    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
+                                 thumb.y + thumb.h / 2 + 40,
+                                 1, 0, 0);
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.left_panel == ReaderViewLeftPanel_None &&
+          state.find_scroll.active_thumb_id == 0 &&
+          state.find_scroll.drag_start_pointer_y == 0 &&
+          state.find_scroll.drag_start_scroll_y == 0,
+          "same-build Find close retires active thumb ownership");
+  }
+
+  {
+    static ReaderViewRightRow long_right[20];
+    static const ReaderViewSemanticControl focused_controls[] = {
+      ReaderViewSemanticControl_RightRow,
+      ReaderViewSemanticControl_RightRowStar,
+      ReaderViewSemanticControl_RightRowMenu,
+    };
+    const UI0ScrollRecord *scroll;
+    const UI0ControlRecord *row_control;
+    const UI0ControlRecord *secondary_control;
+    const UI0ControlRecord *primary_control;
+    const UI0ControlRecord *star_control;
+    const UI0ControlRecord *menu_control;
+    const UI0DrawCommand *secondary_draw;
+    const UI0DrawCommand *primary_draw;
+    const UI0DrawCommand *star_draw;
+    const UI0DrawCommand *menu_draw;
+    UI0Rect content_clip;
+    UI0Rect thumb;
+    UI0S32 index;
+    UI0S32 retained_scroll;
+    for (index = 0; index < 20; ++index)
+    {
+      memset(long_right + index, 0, sizeof(long_right[index]));
+      long_right[index].key = 3000 + (ReaderViewKey)index;
+      long_right[index].kind = ReaderViewRightRow_Highlight;
+      long_right[index].section.data = "R";
+      long_right[index].section.size = 1;
+      long_right[index].secondary.data =
+        index == 0 ? "Location zero" : "Location";
+      long_right[index].secondary.size = index == 0 ? 13 : 8;
+      long_right[index].primary.data =
+        index == 0 ? "Entry zero" : "Entry";
+      long_right[index].primary.size = index == 0 ? 10 : 5;
+      long_right[index].flags = ReaderViewRow_Enabled;
+      long_right[index].actions = ReaderViewRightAction_Activate |
+                                  ReaderViewRightAction_ToggleStar |
+                                  ReaderViewRightAction_Delete;
+    }
+    projection.features = all_features;
+    projection.right.rows = long_right;
+    projection.right.row_count = 20;
+    projection.right.total_count = 20;
+    projection.right.all_count = 20;
+    projection.right.highlight_count = 20;
+    projection.right.bookmark_count = 0;
+    projection.right.note_count = 0;
+    projection.right.available_filters = ReaderViewRightFilterFlag_All |
+      ReaderViewRightFilterFlag_Highlights;
+    projection.right.status = ready_status();
+    reader_view_state_reset_document(&state, projection.document_key);
+    state.right_panel_open = 1;
+    state.right_scroll_y = 0;
+    memset(&input, 0, sizeof(input));
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "long Annotations scroll seed frame builds");
+    scroll = find_scroll_record_on_side(
+      &storage, layout.bounds.x + layout.bounds.w / 2, 1);
+    if (scroll)
+      input.ui = ui0_input_pointer_wheel(
+        scroll->viewport_rect.x + scroll->viewport_rect.w / 2,
+        scroll->viewport_rect.y + scroll->viewport_rect.h / 2,
+        0, 0, 0, 0, 40);
+    check(scroll && lifecycle_build(
+            &state, &layout_input, &layout, &projection, &input,
+            theme, advances, &storage, &frame, frame_index++) &&
+          state.right_scroll_y == 40 &&
+          (frame.change_flags & ReaderViewFrameChange_StateChanged) != 0,
+          "Annotations wheel delta applies exactly once and reports state "
+          "change");
+    scroll = find_scroll_record_on_side(
+      &storage, layout.bounds.x + layout.bounds.w / 2, 1);
+    content_clip = scroll ? scroll->viewport_rect : ui0_rect(0, 0, 0, 0);
+    if (scroll)
+      content_clip.w = scroll->track_rect.x - content_clip.x;
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightRow, 3000);
+    row_control = node ? find_control_for_source(&storage, node->id) : 0;
+    node = find_semantic_role(&frame, "Location zero",
+                              ReaderViewSemantic_Group);
+    secondary_control = node ? find_control_for_source(&storage, node->id) : 0;
+    secondary_draw = node ? find_draw_for_source(
+      &frame, UI0DrawOp_Text, node->id) : 0;
+    node = find_semantic_role(&frame, "Entry zero",
+                              ReaderViewSemantic_Group);
+    primary_control = node ? find_control_for_source(&storage, node->id) : 0;
+    primary_draw = node ? find_draw_for_source(
+      &frame, UI0DrawOp_Text, node->id) : 0;
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightRowStar, 3000);
+    star_control = node ? find_control_for_source(&storage, node->id) : 0;
+    star_draw = node ? find_draw_for_source(
+      &frame, UI0DrawOp_Icon, node->id) : 0;
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightRowMenu, 3000);
+    menu_control = node ? find_control_for_source(&storage, node->id) : 0;
+    menu_draw = node ? find_draw_for_source(
+      &frame, UI0DrawOp_Text, node->id) : 0;
+    check(scroll && row_control && secondary_control && primary_control &&
+          star_control && menu_control && secondary_draw && primary_draw &&
+          star_draw && menu_draw &&
+          row_control->clip_rect.h > 0 &&
+          row_control->clip_rect.h < row_control->rect.h &&
+          secondary_control->clip_rect.h > 0 &&
+          secondary_control->clip_rect.h < secondary_control->rect.h &&
+          rect_within(row_control->clip_rect, content_clip) &&
+          rect_within(secondary_control->clip_rect, content_clip) &&
+          rect_within(primary_control->clip_rect, content_clip) &&
+          rect_within(star_control->clip_rect, content_clip) &&
+          rect_within(menu_control->clip_rect, content_clip) &&
+          rect_within(secondary_draw->clip_rect, content_clip) &&
+          rect_within(primary_draw->clip_rect, content_clip) &&
+          rect_within(star_draw->clip_rect, content_clip) &&
+          rect_within(menu_draw->clip_rect, content_clip),
+          "partial Annotations row/children/star/menu clips exclude its track");
+    if (scroll)
+      input.ui = ui0_input_pointer(
+        scroll->track_rect.x + scroll->track_rect.w / 2,
+        scroll->track_rect.y + scroll->track_rect.h / 2,
+        1, 1, 0);
+    check(scroll && lifecycle_build(
+            &state, &layout_input, &layout, &projection, &input,
+            theme, advances, &storage, &frame, frame_index++) &&
+          find_action(&frame, ReaderViewAction_ActivateRightRow) == 0 &&
+          find_action(&frame, ReaderViewAction_ToggleRightRowStar) == 0 &&
+          state.popup == ReaderViewPopup_None,
+          "Annotations scrollbar press cannot leak into row/star/menu state");
+    if (scroll)
+      input.ui = ui0_input_pointer(
+        scroll->track_rect.x + scroll->track_rect.w / 2,
+        scroll->track_rect.y + scroll->track_rect.h / 2,
+        0, 0, 1);
+    check(scroll && lifecycle_build(
+            &state, &layout_input, &layout, &projection, &input,
+            theme, advances, &storage, &frame, frame_index++) &&
+          find_action(&frame, ReaderViewAction_ActivateRightRow) == 0 &&
+          find_action(&frame, ReaderViewAction_ToggleRightRowStar) == 0 &&
+          state.popup == ReaderViewPopup_None,
+          "Annotations scrollbar release cannot activate row/star/menu state");
+
+    for (index = 0;
+         index < (UI0S32)(sizeof(focused_controls) /
+                          sizeof(focused_controls[0]));
+         ++index)
+    {
+      memset(&input, 0, sizeof(input));
+      state.right_scroll_y = 0;
+      check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                            theme, advances, &storage, &frame, frame_index++),
+            "wheel-hidden Annotations focus seed builds");
+      node = find_semantic_control_source(
+        &frame, focused_controls[index], 3000);
+      check(node && reader_view_accessibility_focus(&state, node->id) &&
+            lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                            theme, advances, &storage, &frame, frame_index++),
+            "wheel-hidden Annotations row control focus builds");
+      scroll = find_scroll_record_on_side(
+        &storage, layout.bounds.x + layout.bounds.w / 2, 1);
+      if (scroll)
+        input.ui = ui0_input_pointer_wheel(
+          scroll->viewport_rect.x + scroll->viewport_rect.w / 2,
+          scroll->viewport_rect.y + scroll->viewport_rect.h / 2,
+          0, 0, 0, 0, 1000);
+      check(scroll && lifecycle_build(
+              &state, &layout_input, &layout, &projection, &input,
+              theme, advances, &storage, &frame, frame_index++) &&
+            state.focus_id == 0 && !state.focus_visible,
+            "large Annotations wheel retires row/star/menu focus when its "
+            "owner leaves publication");
+      projection.right.rows = long_right + 1;
+      projection.right.row_count = 19;
+      projection.right.total_count = 19;
+      projection.right.all_count = 19;
+      projection.right.highlight_count = 19;
+      memset(&input, 0, sizeof(input));
+      check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                            theme, advances, &storage, &frame, frame_index++) &&
+            state.focus_id == 0 &&
+            find_semantic_control_source(
+              &frame, ReaderViewSemanticControl_RightRow, 3000) == 0 &&
+            find_semantic_control_source(
+              &frame, ReaderViewSemanticControl_RightRowStar, 3000) == 0 &&
+            find_semantic_control_source(
+              &frame, ReaderViewSemanticControl_RightRowMenu, 3000) == 0,
+            "removing a wheel-hidden Annotations row retires row/star/menu "
+            "identity");
+      projection.right.rows = long_right;
+      projection.right.row_count = 20;
+      projection.right.total_count = 20;
+      projection.right.all_count = 20;
+      projection.right.highlight_count = 20;
+    }
+
+    memset(&input, 0, sizeof(input));
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "Annotations thumb-owner reset seed builds");
+    scroll = find_scroll_record_on_side(
+      &storage, layout.bounds.x + layout.bounds.w / 2, 1);
+    thumb = scroll ? scroll->thumb_rect : ui0_rect(0, 0, 0, 0);
+    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
+                                 thumb.y + thumb.h / 2,
+                                 1, 1, 0);
+    check(scroll && lifecycle_build(
+            &state, &layout_input, &layout, &projection, &input,
+            theme, advances, &storage, &frame, frame_index++) &&
+          state.right_scroll.active_thumb_id != 0,
+          "Annotations thumb press owns its bounded drag state");
+    retained_scroll = state.right_scroll_y;
+    projection.right.status.state = ReaderViewLoad_Loading;
+    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
+                                 thumb.y + thumb.h / 2 + 40,
+                                 1, 0, 0);
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.right_scroll.active_thumb_id == 0 &&
+          state.right_scroll.drag_start_pointer_y == 0 &&
+          state.right_scroll.drag_start_scroll_y == 0 &&
+          state.right_scroll_y == retained_scroll,
+          "Loading Annotations retires thumb drag ownership but keeps scroll");
+    projection.right.status = ready_status();
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          state.right_scroll.active_thumb_id == 0 &&
+          state.right_scroll_y == retained_scroll,
+          "ready Annotations cannot resume a drag without a new press");
+
+    memset(&input, 0, sizeof(input));
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++),
+          "Annotations immediate-close thumb seed builds");
+    scroll = find_scroll_record_on_side(
+      &storage, layout.bounds.x + layout.bounds.w / 2, 1);
+    thumb = scroll ? scroll->thumb_rect : ui0_rect(0, 0, 0, 0);
+    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
+                                 thumb.y + thumb.h / 2,
+                                 1, 1, 0);
+    check(scroll && lifecycle_build(
+            &state, &layout_input, &layout, &projection, &input,
+            theme, advances, &storage, &frame, frame_index++) &&
+          state.right_scroll.active_thumb_id != 0,
+          "Annotations immediate-close thumb press owns drag state");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightPanelClose, 0);
+    check(node && reader_view_accessibility_invoke(&state, node->id),
+          "Annotations close queues while its thumb is active");
+    input.ui = ui0_input_pointer(thumb.x + thumb.w / 2,
+                                 thumb.y + thumb.h / 2 + 40,
+                                 1, 0, 0);
+    check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                          theme, advances, &storage, &frame, frame_index++) &&
+          !state.right_panel_open &&
+          state.right_scroll.active_thumb_id == 0 &&
+          state.right_scroll.drag_start_pointer_y == 0 &&
+          state.right_scroll.drag_start_scroll_y == 0,
+          "same-build Annotations close retires active thumb ownership");
+  }
+}
+
 int
 main(void)
 {
@@ -696,6 +4365,7 @@ main(void)
   ReaderViewTocRow toc_rows[2];
   ReaderViewFindRow find_rows[1];
   ReaderViewRightRow right_rows[1];
+  ReaderViewCodepointAdvance find_advances[127];
   const ReaderViewSemanticNode *node;
   const ReaderViewAction *action;
   UI0U64 first_hash;
@@ -728,6 +4398,9 @@ main(void)
 
   test_zero_document_interaction(&theme);
   test_progress_u64_scaling(&theme);
+  test_reference_panels_and_disabled_gutter(&theme);
+  test_focus_root_and_refresh_lifecycle(&theme);
+  test_modal_feature_and_scroll_lifecycle(&theme);
 
   geometry_style = reader_view_default_content_geometry_style();
   memset(&geometry, 0, sizeof(geometry));
@@ -840,6 +4513,7 @@ main(void)
   build_input.projection = &projection;
   build_input.input = &frame_input;
   build_input.theme = &theme;
+  build_input.find_text_metrics = test_find_text_metrics(find_advances);
   check(reader_view_build(&build_input, &storage, &frame),
         "minimal build");
   check(frame.error_flags == ReaderViewFrameError_None,
@@ -1152,6 +4826,18 @@ main(void)
   projection.labels.contents.data = 0;
   projection.labels.contents.size = 0;
 
+  projection.labels.annotation_actions.data = "Localized actions";
+  projection.labels.annotation_actions.size = 17;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "appended panel-label hash rebuild");
+  check(reader_view_debug_snapshot(&projection, &storage, &frame,
+                                   &debug_changed) &&
+        debug_changed.projection_hash != debug_first.projection_hash,
+        "debug projection hash includes appended panel/native label fields");
+  projection.labels.annotation_actions.data = 0;
+  projection.labels.annotation_actions.size = 0;
+
   layout_input.bounds = ui0_rect(17, 23, 1400, 780);
   check(reader_view_resolve_layout(&state, &layout_input, &layout),
         "shifted-origin layout resolves");
@@ -1198,9 +4884,63 @@ main(void)
         "progress semantic spans the exact page width");
   if (node)
   {
+    UI0ID progress_id = node->id;
+    const ReaderViewSemanticNode *next_node;
     check(count_draw_op_for_source(&frame, UI0DrawOp_SliderThumb,
-                                   node->id) == 0,
+                                   progress_id) == 0,
           "idle reference progress hides its thumb");
+    check(reader_view_accessibility_focus(&state, progress_id),
+          "progress accessibility focus queues");
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "progress accessibility focus build");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_Progress, 0);
+    check(node && state.focus_id == progress_id && state.focus_visible &&
+          (node->flags & ReaderViewSemantic_Focused) != 0 &&
+          count_draw_op_for_source(&frame, UI0DrawOp_SliderThumb,
+                                   progress_id) == 0 &&
+          count_draw_op_for_source(&frame, UI0DrawOp_FocusRing,
+                                   progress_id) == 0,
+          "focused reference progress remains visually idle while semantic "
+          "focus is published");
+
+    next_node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_NextPage, 0);
+    check(next_node &&
+          reader_view_accessibility_focus(&state, next_node->id),
+          "next gutter focus queues before Tab traversal");
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "next gutter focus build before Tab traversal");
+    memset(&frame_input, 0, sizeof(frame_input));
+    frame_input.ui = ui0_input_keyboard(0, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "same-frame Tab traversal to progress builds");
+    node = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_Progress, 0);
+    check(node && state.focus_id == progress_id && state.focus_visible &&
+          (node->flags & ReaderViewSemantic_Focused) != 0 &&
+          count_draw_op_for_source(&frame, UI0DrawOp_SliderThumb,
+                                   progress_id) == 0 &&
+          count_draw_op_for_source(&frame, UI0DrawOp_FocusRing,
+                                   progress_id) == 0,
+          "same-frame Tab focus preserves frozen hidden progress chrome");
+    memset(&frame_input, 0, sizeof(frame_input));
+    frame_input.move_horizontal_delta = 1;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "focused progress keyboard seek build");
+    action = find_action(&frame, ReaderViewAction_SeekLocation);
+    check(action && action->value == 25 &&
+          count_draw_op_for_source(&frame, UI0DrawOp_SliderThumb,
+                                   progress_id) == 0 &&
+          count_draw_op_for_source(&frame, UI0DrawOp_FocusRing,
+                                   progress_id) == 0,
+          "keyboard progress seek remains functional without idle thumb or "
+          "focus-ring paint");
+    memset(&frame_input, 0, sizeof(frame_input));
   }
   node = find_semantic_role(&frame, "3 of 10", ReaderViewSemantic_Status);
   {
@@ -1241,7 +4981,7 @@ main(void)
           "previous gutter hot-area press build");
     check(find_icon_for_source(&frame, previous_id) != 0 &&
           find_icon_for_source(&frame, previous_id)->icon_kind ==
-            UI0IconKind_ChevronLeft,
+            UI0IconKind_PageCaretLeft,
           "previous gutter icon appears on interaction");
     frame_input.ui = ui0_input_pointer(10, 100, 0, 0, 1);
     build_input.frame_index += 1;
@@ -1372,6 +5112,13 @@ main(void)
   check(reader_view_resolve_layout(&state, &layout_input, &layout),
         "find panel layout resolves");
   memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "find focused edit seed builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_FindInput, 0);
+  check(node != 0 && reader_view_accessibility_focus(&state, node->id),
+        "find focused edit queues input focus");
   frame_input.find_text.text = "abc";
   frame_input.find_text.text_len = 3;
   build_input.frame_index += 1;
@@ -1439,6 +5186,47 @@ main(void)
   check(state.popup == ReaderViewPopup_NoteEditor &&
         text_equal(reader_view_note_draft(&state), "Existing note"),
         "host-requested note editor owns bounded draft state");
+
+  frame_input.note_text.text = "!";
+  frame_input.note_text.text_len = 1;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame) &&
+        state.note_dirty &&
+        text_equal(reader_view_note_draft(&state), "Existing note!"),
+        "note editor records a bounded dirty draft");
+  memset(&frame_input, 0, sizeof(frame_input));
+  frame_input.escape_pressed = 1;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame) &&
+        state.popup == ReaderViewPopup_NoteEditor && state.note_dirty &&
+        text_equal(reader_view_note_draft(&state), "Existing note!") &&
+        find_action(&frame, ReaderViewAction_CancelNote) == 0,
+        "dirty note Escape preserves the draft and requires explicit Cancel");
+  memset(&frame_input, 0, sizeof(frame_input));
+  node = find_semantic(&frame, "Cancel");
+  check(node != 0 && reader_view_accessibility_invoke(&state, node->id),
+        "note Cancel accessibility invoke queues through the shared control");
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "explicit note Cancel build");
+  action = find_action(&frame, ReaderViewAction_CancelNote);
+  check(action != 0 && action->key == 50 && action->value == 7 &&
+        frame.action_count == 1 &&
+        state.popup == ReaderViewPopup_None && !state.note_dirty,
+        "explicit note Cancel closes once and returns authoritative identity");
+  {
+    ReaderViewDebugSnapshot cancel_debug_a;
+    ReaderViewDebugSnapshot cancel_debug_b;
+    check(reader_view_debug_snapshot(&projection, &storage, &frame,
+                                     &cancel_debug_a),
+          "explicit note Cancel debug snapshot captures");
+    storage.actions[0].value = 7007;
+    check(reader_view_debug_snapshot(&projection, &storage, &frame,
+                                     &cancel_debug_b) &&
+          cancel_debug_a.action_hash == cancel_debug_b.action_hash,
+          "explicit note Cancel normalizes opaque revision identity");
+    storage.actions[0].value = 7;
+  }
 
   memset(&projection.selection, 0, sizeof(projection.selection));
   projection.selection.status = ready_status();

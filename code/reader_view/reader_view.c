@@ -11,6 +11,37 @@ enum
   RV_GAP = 8,
   RV_CONTROL_HEIGHT = 32,
   RV_ROW_HEIGHT = 58,
+  RV_NAV_RAIL_WIDTH = 72,
+  RV_NAV_RAIL_ROW_HEIGHT = 34,
+  RV_NAV_RAIL_ROW_STEP = 42,
+  RV_NAV_CONTENTS_START_Y = 52,
+  RV_NAV_CONTENTS_SEMANTIC_ROW_HEIGHT = 32,
+  RV_NAV_CONTENTS_VISUAL_CLIP_Y = 48,
+  RV_NAV_CONTENTS_VISUAL_ROW_HEIGHT = 32,
+  RV_NAV_CONTENTS_VISUAL_ROW_GAP = 2,
+  RV_NAV_CONTENTS_VISUAL_INDICATOR_WIDTH = 3,
+  RV_NAV_CONTENTS_VISUAL_INDICATOR_GAP = 7,
+  RV_NAV_CONTENTS_VISUAL_PADDING_X = 10,
+  RV_NAV_CONTENTS_VISUAL_INDENT = 20,
+  RV_NAV_CONTENTS_VISUAL_EXPANDER = 12,
+  RV_NAV_CONTENTS_VISUAL_EXPANDER_GAP = 6,
+  RV_NAV_CONTENTS_EMPTY_Y = 56,
+  RV_NAV_CONTENTS_EMPTY_HEIGHT = 22,
+  RV_NAV_FIND_ROW_HEIGHT = 88,
+  RV_NAV_FIND_START_Y = 116,
+  RV_NAV_FIND_STATUS_Y = 90,
+  RV_NAV_FIND_STATUS_HEIGHT = 18,
+  RV_NAV_BOTTOM_PAD = 10,
+  RV_NAV_TITLE_HEIGHT = 24,
+  RV_NAV_INPUT_HEIGHT = 34,
+  RV_RIGHT_ROW_HEIGHT = 58,
+  RV_RIGHT_ROW_GAP = 8,
+  RV_RIGHT_SECTION_HEIGHT = 26,
+  RV_RIGHT_SECTION_LABEL_HEIGHT = 20,
+  RV_RIGHT_LIST_START_Y = 50,
+  RV_RIGHT_FILTER_POPUP_HEIGHT = 136,
+  RV_RIGHT_FILTER_ROW_HEIGHT = 29,
+  RV_RIGHT_FILTER_ROW_GAP = 3,
   RV_POPUP_WIDTH = 280,
   RV_NOTE_WIDTH = 512,
   RV_NOTE_HEIGHT = 360,
@@ -26,6 +57,10 @@ enum
   RV_GUTTER_PANEL_GAP = 8,
   RV_GUTTER_VISUAL_WIDTH = 44,
   RV_GUTTER_VISUAL_HEIGHT = 88,
+  RV_GUTTER_CARET_WIDTH = 18,
+  RV_GUTTER_CARET_HEIGHT = 32,
+  RV_TEXT_CARET_BLINK_VISIBLE_FRAMES = 30,
+  RV_TEXT_CARET_BLINK_HIDDEN_FRAMES = 30,
   RV_PROGRESS_BOTTOM_INSET = 20,
   RV_PROGRESS_HIT_HEIGHT = 18,
   RV_FONT_POPUP_ANCHOR_X = 86,
@@ -33,6 +68,8 @@ enum
   RV_FONT_POPUP_GAP = 6,
   RV_FONT_POPUP_CHOICE_CAP = 5,
   RV_ICON_RECORD_CAP = 64,
+  RV_VISUAL_FILL_CAP = 64,
+  RV_TEXT_OVERRIDE_CAP = 64,
 };
 
 typedef struct RVIconRecord
@@ -43,13 +80,30 @@ typedef struct RVIconRecord
   UI0B32 visible;
 } RVIconRecord;
 
+typedef struct RVVisualFillRecord
+{
+  UI0ID source_id;
+  UI0Color color;
+} RVVisualFillRecord;
+
+typedef struct RVTextOverrideRecord
+{
+  UI0ID source_id;
+  UI0TextAlignX align_x;
+  UI0TypographyRole typography_role;
+  UI0Color color;
+} RVTextOverrideRecord;
+
 typedef struct RVBuildContext
 {
   const ReaderViewBuildInput *input;
   ReaderViewFrameStorage *storage;
   ReaderViewFrame *frame;
+  UI0LayoutContext input_layout;
   UI0SignalContext signals;
   UI0DrawContext draw;
+  UI0TextInputContext text_inputs;
+  UI0SidenavContext sidenav_visuals;
   UI0SliderContext sliders;
   UI0ScrollContext scrolls;
   UI0S32 control_count;
@@ -58,6 +112,10 @@ typedef struct RVBuildContext
   UI0S32 action_count;
   UI0S32 icon_count;
   RVIconRecord icons[RV_ICON_RECORD_CAP];
+  UI0S32 visual_fill_count;
+  RVVisualFillRecord visual_fills[RV_VISUAL_FILL_CAP];
+  UI0S32 text_override_count;
+  RVTextOverrideRecord text_overrides[RV_TEXT_OVERRIDE_CAP];
   UI0ID toolbar_id;
   UI0ID left_panel_id;
   UI0ID right_panel_id;
@@ -85,6 +143,13 @@ static UI0B32
 rv_text_valid(ReaderViewText text)
 {
   return text.size >= 0 && (text.size == 0 || text.data != 0);
+}
+
+static UI0B32
+rv_text_same(ReaderViewText a, ReaderViewText b)
+{
+  return a.size == b.size &&
+         (a.size == 0 || memcmp(a.data, b.data, (size_t)a.size) == 0);
 }
 
 static UI0U64
@@ -118,6 +183,230 @@ rv_id(UI0U64 tag, ReaderViewKey key)
   return rv_hash_bytes(hash, &key, (UI0U32)sizeof(key));
 }
 
+static void
+rv_patch_built_focus(RVBuildContext *ctx,
+                     UI0ID id,
+                     UI0B32 focused,
+                     UI0B32 focus_visible)
+{
+  UI0S32 index;
+  if (!ctx || id == 0) return;
+  for (index = 0; index < ctx->control_count; ++index)
+  {
+    UI0ControlRecord *record = ctx->storage->control_records + index;
+    if (record->id != id) continue;
+    record->state &= ~(UI0ControlState_Focused |
+                       UI0ControlState_FocusVisible);
+    record->signal_flags &= ~(UI0Signal_Focused | UI0Signal_FocusVisible);
+    if (focused)
+    {
+      record->state |= UI0ControlState_Focused;
+      record->signal_flags |= UI0Signal_Focused;
+      if (focus_visible)
+      {
+        record->state |= UI0ControlState_FocusVisible;
+        record->signal_flags |= UI0Signal_FocusVisible;
+      }
+    }
+  }
+  for (index = 0; index < ctx->sidenav_visuals.record_count; ++index)
+  {
+    UI0SidenavRecord *record = ctx->sidenav_visuals.records + index;
+    if (record->id != id) continue;
+    record->state &= ~(UI0SidenavState_Focused |
+                       UI0SidenavState_FocusVisible);
+    record->signal_flags &= ~(UI0Signal_Focused | UI0Signal_FocusVisible);
+    if (focused)
+    {
+      record->state |= UI0SidenavState_Focused;
+      record->signal_flags |= UI0Signal_Focused;
+      if (focus_visible)
+      {
+        record->state |= UI0SidenavState_FocusVisible;
+        record->signal_flags |= UI0Signal_FocusVisible;
+      }
+    }
+  }
+  for (index = 0; index < ctx->text_inputs.record_count; ++index)
+  {
+    UI0TextInputRecord *record = ctx->text_inputs.records + index;
+    if (record->id != id) continue;
+    record->state &= ~(UI0TextInputState_Focused |
+                       UI0TextInputState_FocusVisible);
+    record->signal_flags &= ~(UI0Signal_Focused | UI0Signal_FocusVisible);
+    if (focused)
+    {
+      record->state |= UI0TextInputState_Focused;
+      record->signal_flags |= UI0Signal_Focused;
+      if (focus_visible)
+      {
+        record->state |= UI0TextInputState_FocusVisible;
+        record->signal_flags |= UI0Signal_FocusVisible;
+      }
+    }
+  }
+  for (index = 0; index < ctx->sliders.record_count; ++index)
+  {
+    UI0SliderRecord *record = ctx->sliders.records + index;
+    if (record->id != id) continue;
+    record->state &= ~(UI0SliderState_Focused |
+                       UI0SliderState_FocusVisible);
+    record->signal_flags &= ~(UI0Signal_Focused | UI0Signal_FocusVisible);
+    if (focused)
+    {
+      record->state |= UI0SliderState_Focused;
+      record->signal_flags |= UI0Signal_Focused;
+      if (focus_visible)
+      {
+        record->state |= UI0SliderState_FocusVisible;
+        record->signal_flags |= UI0Signal_FocusVisible;
+      }
+    }
+  }
+  for (index = 0; index < ctx->semantic_count; ++index)
+  {
+    ReaderViewSemanticNode *node = ctx->storage->semantic_nodes + index;
+    if (node->id != id) continue;
+    node->flags &= ~ReaderViewSemantic_Focused;
+    if (focused &&
+        (node->flags & ReaderViewSemantic_Focusable) != 0)
+      node->flags |= ReaderViewSemantic_Focused;
+  }
+  if (id == rv_id(400, 0) || id == rv_id(401, 0))
+  {
+    for (index = 0; index < ctx->icon_count; ++index)
+    {
+      RVIconRecord *icon = ctx->icons + index;
+      UI0ControlRecord *record;
+      if (icon->control_index < 0 ||
+          icon->control_index >= ctx->control_count)
+        continue;
+      record = ctx->storage->control_records + icon->control_index;
+      if (record->id != id) continue;
+      icon->visible =
+        (record->state & (UI0ControlState_Hovered |
+                          UI0ControlState_Pressed |
+                          UI0ControlState_Focused |
+                          UI0ControlState_FocusVisible)) != 0;
+    }
+  }
+}
+
+static void
+rv_move_focus(RVBuildContext *ctx, UI0ID id, UI0B32 focus_visible)
+{
+  UI0ID old_id;
+  UI0B32 old_visible;
+  if (!ctx) return;
+  old_id = ctx->signals.focus_id;
+  old_visible = old_id != 0 &&
+    ctx->signals.focus_visible_id == old_id;
+  rv_patch_built_focus(ctx, old_id, 0, 0);
+  ctx->signals.focus_id = id;
+  ctx->signals.focus_visible_id = id && focus_visible ? id : 0;
+  rv_patch_built_focus(ctx, id, id != 0, id != 0 && focus_visible);
+  if (old_id != id || old_visible != (id != 0 && focus_visible))
+    ctx->frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+}
+
+static UI0B32
+rv_control_kind_focusable(UI0ControlKind kind)
+{
+  return kind == UI0ControlKind_TextButton ||
+         kind == UI0ControlKind_IconButton ||
+         kind == UI0ControlKind_Checkbox ||
+         kind == UI0ControlKind_Toggle ||
+         kind == UI0ControlKind_SegmentItem ||
+         kind == UI0ControlKind_MenuItem ||
+         kind == UI0ControlKind_SelectTrigger ||
+         kind == UI0ControlKind_SelectOption ||
+         kind == UI0ControlKind_AccordionHeader ||
+         kind == UI0ControlKind_ListRow ||
+         kind == UI0ControlKind_TableHeader ||
+         kind == UI0ControlKind_TableCell ||
+         kind == UI0ControlKind_TreeRow ||
+         kind == UI0ControlKind_TextInput ||
+         kind == UI0ControlKind_TextArea ||
+         kind == UI0ControlKind_Slider ||
+         kind == UI0ControlKind_ToolbarItem ||
+         kind == UI0ControlKind_SidenavRow ||
+         kind == UI0ControlKind_MenuTrigger;
+}
+
+static void
+rv_unblock_built_normal_root(RVBuildContext *ctx)
+{
+  UI0S32 index;
+  if (!ctx) return;
+  for (index = 0; index < ctx->control_count; ++index)
+  {
+    UI0ControlRecord *record = ctx->storage->control_records + index;
+    UI0S32 semantic_index;
+    if (record->root != UI0RootKind_Normal) continue;
+    record->state &= ~UI0ControlState_BlockedByRoot;
+    record->signal_flags &= ~UI0Signal_BlockedByRoot;
+    if (!rv_control_kind_focusable(record->kind) ||
+        (record->control_flags & UI0Control_Disabled) != 0)
+      continue;
+    for (semantic_index = 0;
+         semantic_index < ctx->semantic_count;
+         ++semantic_index)
+    {
+      ReaderViewSemanticNode *node =
+        ctx->storage->semantic_nodes + semantic_index;
+      if (node->id == record->id)
+        node->flags |= ReaderViewSemantic_Enabled |
+                       ReaderViewSemantic_Focusable;
+    }
+  }
+  for (index = 0; index < ctx->text_inputs.record_count; ++index)
+  {
+    ctx->text_inputs.records[index].state &=
+      ~UI0TextInputState_BlockedByRoot;
+    ctx->text_inputs.records[index].signal_flags &=
+      ~UI0Signal_BlockedByRoot;
+  }
+  for (index = 0; index < ctx->sidenav_visuals.record_count; ++index)
+  {
+    ctx->sidenav_visuals.records[index].state &=
+      ~UI0SidenavState_BlockedByRoot;
+    ctx->sidenav_visuals.records[index].signal_flags &=
+      ~UI0Signal_BlockedByRoot;
+  }
+  for (index = 0; index < ctx->sliders.record_count; ++index)
+  {
+    UI0SliderRecord *record = ctx->sliders.records + index;
+    UI0S32 semantic_index;
+    record->signal_flags &= ~UI0Signal_BlockedByRoot;
+    if ((record->flags & UI0Slider_Disabled) != 0) continue;
+    for (semantic_index = 0;
+         semantic_index < ctx->semantic_count;
+         ++semantic_index)
+    {
+      ReaderViewSemanticNode *node =
+        ctx->storage->semantic_nodes + semantic_index;
+      if (node->id == record->id)
+        node->flags |= ReaderViewSemantic_Enabled |
+                       ReaderViewSemantic_Focusable;
+    }
+  }
+}
+
+static UI0B32
+rv_right_row_starts_section(const ReaderViewRightProjection *right,
+                            UI0S32 index);
+static UI0S32
+rv_right_content_height(const ReaderViewRightProjection *right);
+static void
+rv_close_popup_and_restore_focus(RVBuildContext *ctx);
+static void
+rv_clear_prior_popup_interaction(ReaderViewState *state,
+                                 UI0ID restore_id);
+static void
+rv_reset_scroll_interaction(UI0ScrollState *scroll,
+                            ReaderViewFrame *frame);
+static UI0B32 rv_rect_intersects(UI0Rect a, UI0Rect b);
+
 static UI0S32
 rv_max(UI0S32 a, UI0S32 b)
 {
@@ -136,6 +425,17 @@ rv_clamp(UI0S32 value, UI0S32 low, UI0S32 high)
   if (value < low) return low;
   if (value > high) return high;
   return value;
+}
+
+static UI0B32
+rv_text_caret_is_visible(UI0U64 frame_index)
+{
+  UI0U64 visible = RV_TEXT_CARET_BLINK_VISIBLE_FRAMES;
+  UI0U64 period = visible + RV_TEXT_CARET_BLINK_HIDDEN_FRAMES;
+  UI0U64 phase;
+  if (frame_index == 0 || visible == 0 || period == 0) return 1;
+  phase = (frame_index - 1) % period;
+  return phase < visible;
 }
 
 /*
@@ -328,8 +628,8 @@ reader_view_default_english_labels(void)
   labels.highlights = rv_literal("Highlights");
   labels.notes = rv_literal("Notes");
   labels.go_to = rv_literal("Go to");
-  labels.star = rv_literal("Star");
-  labels.unstar = rv_literal("Unstar");
+  labels.star = rv_literal("Add star");
+  labels.unstar = rv_literal("Remove star");
   labels.edit_note = rv_literal("Edit note");
   labels.save_note = rv_literal("Save note");
   labels.cancel = rv_literal("Cancel");
@@ -339,6 +639,28 @@ reader_view_default_english_labels(void)
   labels.web_lookup = rv_literal("Web lookup");
   labels.translate = rv_literal("Translate");
   labels.more = rv_literal("More");
+  labels.close_navigation = rv_literal("Close navigation");
+  labels.search_input = rv_literal("Search input");
+  labels.clear_search = rv_literal("Clear search");
+  labels.annotation_actions = rv_literal("Annotation actions");
+  labels.annotation_filters = rv_literal("Annotation filters");
+  labels.export_annotations = rv_literal("Export annotations");
+  labels.close_annotations = rv_literal("Close annotations");
+  labels.delete_bookmark = rv_literal("Delete bookmark");
+  labels.delete_note = rv_literal("Delete note");
+  labels.delete_highlight = rv_literal("Delete highlight");
+  labels.contents_short = rv_literal("TOC");
+  labels.contents_panel_title = rv_literal("Table of Contents");
+  labels.find_panel_title = rv_literal("Search");
+  labels.filter_annotations = rv_literal("Filter annotations");
+  labels.no_contents = rv_literal("No contents");
+  labels.find_prompt = rv_literal("Type and press Enter");
+  labels.no_matches = rv_literal("No matches");
+  labels.no_annotations = rv_literal("No annotations");
+  labels.no_bookmarks = rv_literal("No bookmarks");
+  labels.no_highlights = rv_literal("No highlights");
+  labels.no_notes = rv_literal("No notes");
+  labels.find_placeholder = rv_literal("Search in book");
   return labels;
 }
 
@@ -523,8 +845,12 @@ reader_view_resolve_layout(const ReaderViewState *state,
     (input->features & ReaderViewFeature_Progress) != 0 &&
     (input->document_flags & ReaderViewDocument_Open) != 0;
   result.left_panel_visible = !chrome_hidden &&
-    state->left_panel != ReaderViewLeftPanel_None;
-  result.right_panel_visible = !chrome_hidden && state->right_panel_open;
+    ((state->left_panel == ReaderViewLeftPanel_Contents &&
+      (input->features & ReaderViewFeature_Contents) != 0) ||
+     (state->left_panel == ReaderViewLeftPanel_Find &&
+      (input->features & ReaderViewFeature_Find) != 0));
+  result.right_panel_visible = !chrome_hidden && state->right_panel_open &&
+    (input->features & ReaderViewFeature_Annotations) != 0;
 
   if (input->bounds.w >= 1180)
     result.mode = ReaderViewLayout_WideDocked;
@@ -886,6 +1212,10 @@ rv_validate_projection(const ReaderViewProjection *projection)
       if (!rv_key_unique(row->key, keys, index))
         errors |= ReaderViewFrameError_DuplicateKey;
       keys[index] = row->key;
+      if ((row->flags & ~(ReaderViewRow_Enabled |
+                          ReaderViewRow_Current |
+                          ReaderViewRow_Selected)) != 0)
+        errors |= ReaderViewFrameError_BadInput;
       rv_validate_text(row->label, &errors);
       rv_validate_text(row->detail, &errors);
     }
@@ -905,6 +1235,10 @@ rv_validate_projection(const ReaderViewProjection *projection)
       if (!rv_key_unique(row->key, keys, index))
         errors |= ReaderViewFrameError_DuplicateKey;
       keys[index] = row->key;
+      if ((row->flags & ~(ReaderViewRow_Enabled |
+                          ReaderViewRow_Current |
+                          ReaderViewRow_Selected)) != 0)
+        errors |= ReaderViewFrameError_BadInput;
       rv_validate_text(row->section, &errors);
       rv_validate_text(row->excerpt, &errors);
       rv_validate_text(row->detail, &errors);
@@ -939,9 +1273,41 @@ rv_validate_projection(const ReaderViewProjection *projection)
       if (row->kind < ReaderViewRightRow_Bookmark ||
           row->kind > ReaderViewRightRow_Note)
         errors |= ReaderViewFrameError_BadInput;
+      if ((row->flags & ~(ReaderViewRow_Enabled |
+                          ReaderViewRow_Current |
+                          ReaderViewRow_Selected |
+                          ReaderViewRow_Starred |
+                          ReaderViewRow_AttachedToPrevious)) != 0 ||
+          (row->actions & ~(ReaderViewRightAction_Activate |
+                            ReaderViewRightAction_ToggleStar |
+                            ReaderViewRightAction_EditNote |
+                            ReaderViewRightAction_Delete)) != 0)
+        errors |= ReaderViewFrameError_BadInput;
+      if (row->kind != ReaderViewRightRow_Note &&
+          (row->actions & ReaderViewRightAction_EditNote) != 0)
+        errors |= ReaderViewFrameError_BadInput;
       rv_validate_text(row->section, &errors);
       rv_validate_text(row->primary, &errors);
       rv_validate_text(row->secondary, &errors);
+      if ((row->flags & ReaderViewRow_AttachedToPrevious) != 0)
+      {
+        if (index == 0 || row->kind != ReaderViewRightRow_Note ||
+            projection->right.rows[index - 1].kind !=
+              ReaderViewRightRow_Highlight ||
+            (row->section.size > 0 &&
+             (!rv_text_valid(row->section) ||
+              !rv_text_valid(projection->right.rows[index - 1].section) ||
+              !rv_text_same(row->section,
+                            projection->right.rows[index - 1].section))) ||
+            row->color_key == 0 ||
+            projection->right.rows[index - 1].color_key == 0 ||
+            row->color_key != projection->right.rows[index - 1].color_key ||
+            row->rail_color == 0 ||
+            projection->right.rows[index - 1].rail_color == 0 ||
+            row->rail_color !=
+              projection->right.rows[index - 1].rail_color)
+          errors |= ReaderViewFrameError_InvalidAttachment;
+      }
     }
   }
 
@@ -988,6 +1354,28 @@ rv_validate_projection(const ReaderViewProjection *projection)
   RV_VALIDATE_LABEL(web_lookup);
   RV_VALIDATE_LABEL(translate);
   RV_VALIDATE_LABEL(more);
+  RV_VALIDATE_LABEL(close_navigation);
+  RV_VALIDATE_LABEL(search_input);
+  RV_VALIDATE_LABEL(clear_search);
+  RV_VALIDATE_LABEL(annotation_actions);
+  RV_VALIDATE_LABEL(annotation_filters);
+  RV_VALIDATE_LABEL(export_annotations);
+  RV_VALIDATE_LABEL(close_annotations);
+  RV_VALIDATE_LABEL(delete_bookmark);
+  RV_VALIDATE_LABEL(delete_note);
+  RV_VALIDATE_LABEL(delete_highlight);
+  RV_VALIDATE_LABEL(contents_short);
+  RV_VALIDATE_LABEL(contents_panel_title);
+  RV_VALIDATE_LABEL(find_panel_title);
+  RV_VALIDATE_LABEL(filter_annotations);
+  RV_VALIDATE_LABEL(no_contents);
+  RV_VALIDATE_LABEL(find_prompt);
+  RV_VALIDATE_LABEL(no_matches);
+  RV_VALIDATE_LABEL(no_annotations);
+  RV_VALIDATE_LABEL(no_bookmarks);
+  RV_VALIDATE_LABEL(no_highlights);
+  RV_VALIDATE_LABEL(no_notes);
+  RV_VALIDATE_LABEL(find_placeholder);
 #undef RV_VALIDATE_LABEL
   return errors;
 }
@@ -1038,6 +1426,28 @@ rv_resolve_labels(ReaderViewLabels supplied)
   RV_LABEL(web_lookup);
   RV_LABEL(translate);
   RV_LABEL(more);
+  RV_LABEL(close_navigation);
+  RV_LABEL(search_input);
+  RV_LABEL(clear_search);
+  RV_LABEL(annotation_actions);
+  RV_LABEL(annotation_filters);
+  RV_LABEL(export_annotations);
+  RV_LABEL(close_annotations);
+  RV_LABEL(delete_bookmark);
+  RV_LABEL(delete_note);
+  RV_LABEL(delete_highlight);
+  RV_LABEL(contents_short);
+  RV_LABEL(contents_panel_title);
+  RV_LABEL(find_panel_title);
+  RV_LABEL(filter_annotations);
+  RV_LABEL(no_contents);
+  RV_LABEL(find_prompt);
+  RV_LABEL(no_matches);
+  RV_LABEL(no_annotations);
+  RV_LABEL(no_bookmarks);
+  RV_LABEL(no_highlights);
+  RV_LABEL(no_notes);
+  RV_LABEL(find_placeholder);
 #undef RV_LABEL
   return supplied;
 }
@@ -1078,7 +1488,8 @@ rv_semantic_flags(RVBuildContext *ctx,
   ReaderViewSemanticFlags flags = ReaderViewSemantic_None;
   if (enabled) flags |= ReaderViewSemantic_Enabled;
   if (focusable) flags |= ReaderViewSemantic_Focusable;
-  if (ctx->signals.focus_id == id) flags |= ReaderViewSemantic_Focused;
+  if (focusable && ctx->signals.focus_id == id)
+    flags |= ReaderViewSemantic_Focused;
   if (selected) flags |= ReaderViewSemantic_Selected;
   if (checked) flags |= ReaderViewSemantic_Checked;
   if (expanded) flags |= ReaderViewSemantic_Expanded;
@@ -1139,6 +1550,40 @@ rv_set_semantic_control(RVBuildContext *ctx,
   }
 }
 
+static void
+rv_set_semantic_rect(RVBuildContext *ctx, UI0ID id, UI0Rect rect)
+{
+  UI0S32 index;
+  if (!ctx) return;
+  for (index = ctx->semantic_count - 1; index >= 0; index -= 1)
+  {
+    ReaderViewSemanticNode *node = ctx->storage->semantic_nodes + index;
+    if (node->id == id)
+    {
+      node->rect = rect;
+      return;
+    }
+  }
+}
+
+static void
+rv_add_semantic_flags_for_id(RVBuildContext *ctx,
+                             UI0ID id,
+                             ReaderViewSemanticFlags flags)
+{
+  UI0S32 index;
+  if (!ctx) return;
+  for (index = ctx->semantic_count - 1; index >= 0; index -= 1)
+  {
+    ReaderViewSemanticNode *node = ctx->storage->semantic_nodes + index;
+    if (node->id == id)
+    {
+      node->flags |= flags;
+      return;
+    }
+  }
+}
+
 static UI0B32
 rv_add_binding(RVBuildContext *ctx,
                UI0ID source_id,
@@ -1153,10 +1598,77 @@ rv_add_binding(RVBuildContext *ctx,
     return 0;
   }
   binding = ctx->storage->text_bindings + ctx->text_count++;
+  memset(binding, 0, sizeof(*binding));
   binding->source_id = source_id;
   binding->text = text;
   binding->style = style;
   return 1;
+}
+
+static void
+rv_set_text_binding_match(RVBuildContext *ctx,
+                          UI0ID source_id,
+                          UI0U32 match_start,
+                          UI0U32 match_size)
+{
+  UI0S32 index;
+  if (!ctx || match_size == 0) return;
+  for (index = ctx->text_count - 1; index >= 0; --index)
+  {
+    ReaderViewTextBinding *binding = ctx->storage->text_bindings + index;
+    if (binding->source_id == source_id)
+    {
+      binding->match_start = match_start;
+      binding->match_size = match_size;
+      return;
+    }
+  }
+}
+
+static void
+rv_set_control_visual_text(RVBuildContext *ctx,
+                           UI0ID source_id,
+                           ReaderViewText text)
+{
+  UI0S32 index;
+  if (!ctx) return;
+  for (index = ctx->control_count - 1; index >= 0; --index)
+  {
+    UI0ControlRecord *record = ctx->storage->control_records + index;
+    if (record->id == source_id)
+    {
+      record->label_hash = rv_text_hash(text);
+      record->label_len = text.size;
+      break;
+    }
+  }
+  for (index = ctx->text_count - 1; index >= 0; --index)
+  {
+    ReaderViewTextBinding *binding = ctx->storage->text_bindings + index;
+    if (binding->source_id == source_id)
+    {
+      binding->text = text;
+      break;
+    }
+  }
+}
+
+static void
+rv_set_semantic_value(RVBuildContext *ctx,
+                      UI0ID id,
+                      ReaderViewText value)
+{
+  UI0S32 index;
+  if (!ctx) return;
+  for (index = ctx->semantic_count - 1; index >= 0; --index)
+  {
+    ReaderViewSemanticNode *node = ctx->storage->semantic_nodes + index;
+    if (node->id == id)
+    {
+      node->value = value;
+      return;
+    }
+  }
 }
 
 static UI0B32
@@ -1250,6 +1762,9 @@ rv_add_control_with_hit_rect(RVBuildContext *ctx,
   UI0Signal signal;
   UI0ControlRecord *record;
   UI0ControlFlags control_flags = UI0Control_None;
+  UI0B32 blocked;
+  UI0B32 pending_focus;
+  UI0B32 pending_invoke;
   UI0B32 invoked;
   memset(&signal_spec, 0, sizeof(signal_spec));
   signal_spec.id = id;
@@ -1259,6 +1774,9 @@ rv_add_control_with_hit_rect(RVBuildContext *ctx,
   signal_spec.rect = rect;
   signal_spec.hit_rect = hit_rect;
   signal = ui0_signal_from_rect(&ctx->signals, signal_spec);
+  blocked = ui0_signal_has(signal, UI0Signal_BlockedByRoot);
+  pending_focus = ctx->input->state->pending_accessibility_focus_id == id;
+  pending_invoke = ctx->input->state->pending_accessibility_invoke_id == id;
 
   if (!enabled) control_flags |= UI0Control_Disabled;
   if (selected) control_flags |= UI0Control_Selected;
@@ -1287,12 +1805,11 @@ rv_add_control_with_hit_rect(RVBuildContext *ctx,
   record->label_len = label.size;
   record->value = checked;
   record->next_value = !checked;
-  if (ctx->input->state->pending_accessibility_focus_id == id)
+  if (pending_focus)
   {
-    ctx->signals.focus_id = id;
-    ctx->signals.focus_visible_id = id;
     ctx->input->state->pending_accessibility_focus_id = 0;
-    ctx->frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+    if (!blocked)
+      rv_move_focus(ctx, id, 1);
   }
   (void)rv_add_binding(ctx,
                        id,
@@ -1304,7 +1821,8 @@ rv_add_control_with_hit_rect(RVBuildContext *ctx,
                         id,
                         parent_id,
                         role,
-                        rv_semantic_flags(ctx, id, enabled, 1,
+                        rv_semantic_flags(ctx, id, enabled && !blocked,
+                                          !blocked,
                                           selected, checked, open),
                         hit_rect,
                         label,
@@ -1313,12 +1831,174 @@ rv_add_control_with_hit_rect(RVBuildContext *ctx,
                         0,
                         0,
                         0);
-  invoked = ui0_signal_has(signal, UI0Signal_Clicked) ||
-            ui0_signal_has(signal, UI0Signal_KeyboardActivated) ||
-            ctx->input->state->pending_accessibility_invoke_id == id;
-  if (ctx->input->state->pending_accessibility_invoke_id == id)
+  invoked = enabled && !blocked &&
+            (ui0_signal_has(signal, UI0Signal_Clicked) ||
+             ui0_signal_has(signal, UI0Signal_KeyboardActivated) ||
+             pending_invoke);
+  if (pending_invoke && enabled && !blocked)
+    rv_move_focus(ctx, id, 1);
+  if (pending_invoke)
     ctx->input->state->pending_accessibility_invoke_id = 0;
   return invoked;
+}
+
+static void
+rv_add_visual_fill(RVBuildContext *ctx,
+                   UI0ID id,
+                   UI0Rect rect,
+                   UI0Rect clip_rect,
+                   UI0Color color)
+{
+  UI0ControlRecord *record;
+  RVVisualFillRecord *visual;
+  if (ctx->control_count >= READER_VIEW_CONTROL_CAP ||
+      ctx->visual_fill_count >= RV_VISUAL_FILL_CAP)
+  {
+    ctx->frame->error_flags |= ReaderViewFrameError_RecordCap;
+    return;
+  }
+  record = ctx->storage->control_records + ctx->control_count++;
+  memset(record, 0, sizeof(*record));
+  record->id = id;
+  record->kind = UI0ControlKind_Surface;
+  record->box_index = UI0LayoutInvalidIndex;
+  record->root = UI0RootKind_Normal;
+  record->rect = rect;
+  record->clip_rect = clip_rect;
+  record->text_rect = rv_rect(0, 0, 0, 0);
+  visual = ctx->visual_fills + ctx->visual_fill_count++;
+  visual->source_id = id;
+  visual->color = color;
+}
+
+static UI0ControlRecord *
+rv_control_record_for_id(RVBuildContext *ctx, UI0ID id)
+{
+  UI0S32 index;
+  if (!ctx || id == 0) return 0;
+  for (index = ctx->control_count - 1; index >= 0; --index)
+  {
+    UI0ControlRecord *record = ctx->storage->control_records + index;
+    if (record->id == id) return record;
+  }
+  return 0;
+}
+
+static void
+rv_make_control_nonquiet(RVBuildContext *ctx, UI0ID id)
+{
+  UI0ControlRecord *record = rv_control_record_for_id(ctx, id);
+  if (record) record->control_flags &= ~UI0Control_Quiet;
+}
+
+static UI0SidenavStateFlags
+rv_sidenav_state_from_control(const UI0ControlRecord *control)
+{
+  UI0SidenavStateFlags result = UI0SidenavState_None;
+  if (!control) return result;
+  if (control->state & UI0ControlState_Hovered)
+    result |= UI0SidenavState_Hovered;
+  if (control->state & UI0ControlState_Pressed)
+    result |= UI0SidenavState_Pressed;
+  if (control->state & UI0ControlState_Active)
+    result |= UI0SidenavState_Active;
+  if (control->state & UI0ControlState_Focused)
+    result |= UI0SidenavState_Focused;
+  if (control->state & UI0ControlState_Disabled)
+    result |= UI0SidenavState_Disabled;
+  if (control->state & UI0ControlState_Clicked)
+    result |= UI0SidenavState_Clicked;
+  if (control->state & UI0ControlState_KeyboardActivated)
+    result |= UI0SidenavState_KeyboardActivated;
+  if (control->state & UI0ControlState_BlockedByRoot)
+    result |= UI0SidenavState_BlockedByRoot;
+  if (control->state & UI0ControlState_FocusVisible)
+    result |= UI0SidenavState_FocusVisible;
+  return result;
+}
+
+static void
+rv_add_sidenav_visual(RVBuildContext *ctx,
+                      UI0ID id,
+                      UI0ID sidenav_id,
+                      UI0S32 item_index,
+                      UI0S32 depth,
+                      UI0Rect outer_rect,
+                      UI0Rect body_rect,
+                      UI0Rect clip_rect,
+                      UI0Rect text_rect,
+                      UI0Rect current_rect,
+                      UI0Rect expander_rect,
+                      ReaderViewText label,
+                      UI0B32 selected,
+                      UI0B32 current,
+                      UI0B32 has_children,
+                      UI0B32 expanded)
+{
+  UI0SidenavRecord *record;
+  UI0ControlRecord *control;
+  if (!ctx || ctx->sidenav_visuals.record_count >=
+              ctx->sidenav_visuals.record_cap)
+  {
+    if (ctx) ctx->frame->error_flags |= ReaderViewFrameError_RecordCap;
+    return;
+  }
+  control = rv_control_record_for_id(ctx, id);
+  record = ctx->sidenav_visuals.records +
+           ctx->sidenav_visuals.record_count++;
+  memset(record, 0, sizeof(*record));
+  record->id = id;
+  record->sidenav_id = sidenav_id;
+  record->item_index = item_index;
+  record->visible_index = item_index;
+  record->depth = depth;
+  record->root = UI0RootKind_Normal;
+  record->state = rv_sidenav_state_from_control(control);
+  record->signal_flags = control ? control->signal_flags : 0;
+  record->rect = body_rect;
+  record->hit_rect = ui0_rect_intersect(outer_rect, clip_rect);
+  record->clip_rect = clip_rect;
+  record->text_rect = text_rect;
+  record->current_rect = current_rect;
+  record->expander_rect = expander_rect;
+  record->label_hash = rv_text_hash(label);
+  record->label_len = label.size;
+  if (selected) record->state |= UI0SidenavState_Selected;
+  if (current) record->state |= UI0SidenavState_Current;
+  if (has_children) record->state |= UI0SidenavState_HasChildren;
+  if (expanded) record->state |= UI0SidenavState_Expanded;
+}
+
+static UI0B32
+rv_has_sidenav_visual(const RVBuildContext *ctx, UI0ID id)
+{
+  UI0S32 index;
+  if (!ctx || id == 0) return 0;
+  for (index = 0; index < ctx->sidenav_visuals.record_count; ++index)
+  {
+    if (ctx->sidenav_visuals.records[index].id == id) return 1;
+  }
+  return 0;
+}
+
+static void
+rv_add_text_override(RVBuildContext *ctx,
+                     UI0ID id,
+                     UI0TextAlignX align_x,
+                     UI0TypographyRole typography_role,
+                     UI0Color color)
+{
+  RVTextOverrideRecord *record;
+  if (ctx->text_override_count >= RV_TEXT_OVERRIDE_CAP)
+  {
+    ctx->frame->error_flags |= ReaderViewFrameError_RecordCap;
+    return;
+  }
+  record = ctx->text_overrides + ctx->text_override_count++;
+  record->source_id = id;
+  record->align_x = align_x;
+  record->typography_role = typography_role;
+  record->color = color;
 }
 
 static UI0B32
@@ -1495,59 +2175,9 @@ rv_find_right_row(const ReaderViewProjection *projection, ReaderViewKey key)
 }
 
 static UI0B32
-rv_apply_text_input(UI0TextInputBuffer *buffer,
-                    UI0TextInputState *state,
-                    const UI0TextInputFrameInput *input,
-                    UI0B32 *out_committed)
-{
-  UI0B32 edited = 0;
-  *out_committed = 0;
-  if (input->select_all) ui0_text_input_select_all(buffer, state);
-  if (input->move_start)
-  {
-    if (input->extend_selection) ui0_text_input_select_to_start(buffer, state);
-    else ui0_text_input_move_caret_to_start(buffer, state);
-  }
-  if (input->move_end)
-  {
-    if (input->extend_selection) ui0_text_input_select_to_end(buffer, state);
-    else ui0_text_input_move_caret_to_end(buffer, state);
-  }
-  if (input->move_delta)
-  {
-    if (input->extend_selection)
-      ui0_text_input_select_move(buffer, state, input->move_delta);
-    else
-      ui0_text_input_move_caret(buffer, state, input->move_delta);
-  }
-  if (input->copy_pressed && input->transfer_buffer)
-    (void)ui0_text_input_copy_selection(buffer, state, input->transfer_buffer);
-  if (input->cut_pressed && input->transfer_buffer)
-    edited |= ui0_text_input_cut_selection(buffer, state, input->transfer_buffer);
-  if (input->paste_pressed && input->transfer_buffer)
-    edited |= ui0_text_input_try_paste(buffer, state, input->transfer_buffer);
-  if (input->undo_pressed) edited |= ui0_text_input_undo(buffer, state);
-  if (input->redo_pressed) edited |= ui0_text_input_redo(buffer, state);
-  if (input->backspace_pressed) edited |= ui0_text_input_backspace(buffer, state);
-  if (input->delete_pressed) edited |= ui0_text_input_delete(buffer, state);
-  if (input->text_len > 0 && input->text)
-    edited |= ui0_text_input_try_insert_text(buffer, state,
-                                             input->text, input->text_len);
-  if (input->commit_pressed)
-  {
-    *out_committed = 1;
-    if (input->commit_buffer)
-      (void)ui0_text_input_commit(buffer, state, input->commit_buffer,
-                                  input->clear_on_commit);
-  }
-  return edited;
-}
-
-static UI0B32
 rv_apply_text_area(UI0TextInputBuffer *buffer,
                    UI0TextAreaState *state,
-                   const UI0TextAreaFrameInput *input,
-                   UI0S32 vertical_delta)
+                   const UI0TextAreaFrameInput *input)
 {
   UI0B32 edited = 0;
   UI0S32 delta = input->move_delta;
@@ -1567,9 +2197,9 @@ rv_apply_text_area(UI0TextInputBuffer *buffer,
     if (input->extend_selection) ui0_text_area_select_move(buffer, state, delta);
     else ui0_text_area_move_caret(buffer, state, delta);
   }
-  if (vertical_delta || input->move_vertical_delta)
+  if (input->move_vertical_delta)
   {
-    UI0S32 approximate = (vertical_delta + input->move_vertical_delta) * 40;
+    UI0S32 approximate = input->move_vertical_delta * 40;
     if (input->extend_selection) ui0_text_area_select_move(buffer, state, approximate);
     else ui0_text_area_move_caret(buffer, state, approximate);
   }
@@ -1611,6 +2241,7 @@ reader_view_open_note_editor(ReaderViewState *state,
                              const ReaderViewSelectionProjection *selection)
 {
   if (!state || !selection ||
+      selection->status.state != ReaderViewLoad_Ready ||
       (selection->flags & ReaderViewSelection_Active) == 0 ||
       selection->selection_key == 0 ||
       (selection->flags & (ReaderViewSelection_CanAddNote |
@@ -1628,9 +2259,11 @@ static void
 rv_open_note_editor(RVBuildContext *ctx)
 {
   ReaderViewState *state = ctx->input->state;
+  UI0ID restore_id = state->popup == ReaderViewPopup_SelectionTools ?
+    state->restore_focus_id : ctx->signals.focus_id;
   rv_copy_note_to_state(state, &ctx->input->projection->selection);
   state->popup = ReaderViewPopup_NoteEditor;
-  state->restore_focus_id = state->focus_id;
+  state->restore_focus_id = restore_id;
   ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
 }
 
@@ -1638,24 +2271,111 @@ static void
 rv_handle_escape(RVBuildContext *ctx)
 {
   ReaderViewState *state = ctx->input->state;
+  UI0ID restore_id = 0;
+  UI0B32 focus_visible =
+    ctx->signals.focus_id != 0 &&
+    ctx->signals.focus_visible_id == ctx->signals.focus_id;
   if (!ctx->input->input->escape_pressed) return;
   if (state->popup == ReaderViewPopup_NoteEditor && state->note_dirty)
     return;
   if (state->popup != ReaderViewPopup_None)
   {
+    ReaderViewPopupKind dismissed_popup = state->popup;
+    UI0S32 popup_index;
     if (state->popup == ReaderViewPopup_SelectionTools)
       state->dismissed_selection_key = state->last_selection_key;
+    if (dismissed_popup == ReaderViewPopup_RightFilter)
+      state->right_filter_menu_flags = 0;
+    restore_id = state->restore_focus_id;
+    for (popup_index = 0;
+         popup_index < state->prior_popup_item_count;
+         ++popup_index)
+    {
+      UI0ID id = state->prior_popup_item_ids[popup_index];
+      if (ctx->signals.hot_id == id) ctx->signals.hot_id = 0;
+      if (ctx->signals.active_id == id) ctx->signals.active_id = 0;
+    }
+    rv_clear_prior_popup_interaction(state, restore_id);
     state->popup = ReaderViewPopup_None;
-    if (state->restore_focus_id) state->focus_id = state->restore_focus_id;
     state->restore_focus_id = 0;
+    if (dismissed_popup == ReaderViewPopup_RightRowActions)
+    {
+      state->right_menu_key = 0;
+      state->right_menu_actions = ReaderViewRightAction_None;
+    }
   }
-  else if (state->right_panel_open)
-    state->right_panel_open = 0;
   else if (state->left_panel != ReaderViewLeftPanel_None)
+  {
     state->left_panel = ReaderViewLeftPanel_None;
+    state->pending_left_panel_focus = ReaderViewLeftPanel_None;
+    rv_reset_scroll_interaction(&state->toc_scroll, ctx->frame);
+    rv_reset_scroll_interaction(&state->find_scroll, ctx->frame);
+    restore_id = state->left_panel_restore_focus_id;
+    state->left_panel_restore_focus_id = 0;
+    ctx->frame->change_flags |= ReaderViewFrameChange_LayoutChanged;
+  }
   else
     return;
+  rv_move_focus(ctx, restore_id, focus_visible);
   ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
+}
+
+static void
+rv_clear_prior_popup_interaction(ReaderViewState *state,
+                                 UI0ID restore_id)
+{
+  UI0S32 index;
+  UI0B32 focus_was_visible;
+  if (!state) return;
+  focus_was_visible = state->focus_id != 0 && state->focus_visible;
+  for (index = 0; index < state->prior_popup_item_count; ++index)
+  {
+    UI0ID id = state->prior_popup_item_ids[index];
+    if (state->focus_id == id)
+    {
+      state->focus_id = restore_id;
+      state->focus_visible = restore_id != 0 && focus_was_visible;
+    }
+    if (state->hot_id == id) state->hot_id = 0;
+    if (state->active_id == id) state->active_id = 0;
+    if (state->pending_accessibility_focus_id == id)
+      state->pending_accessibility_focus_id = 0;
+    if (state->pending_accessibility_invoke_id == id)
+      state->pending_accessibility_invoke_id = 0;
+  }
+  state->prior_popup_item_count = 0;
+  state->prior_popup_kind = ReaderViewPopup_None;
+}
+
+UI0B32
+reader_view_close_note_editor(ReaderViewState *state)
+{
+  UI0ID restore_id;
+  UI0B32 focus_was_visible;
+  UI0U64 tag;
+  if (!state || state->popup != ReaderViewPopup_NoteEditor) return 0;
+  restore_id = state->restore_focus_id;
+  focus_was_visible = state->focus_id != 0 && state->focus_visible;
+  rv_clear_prior_popup_interaction(state, restore_id);
+  for (tag = 500; tag <= 505; ++tag)
+  {
+    UI0ID id = rv_id(tag, state->note_selection_key);
+    if (state->focus_id == id)
+    {
+      state->focus_id = restore_id;
+      state->focus_visible = restore_id != 0 && focus_was_visible;
+    }
+    if (state->hot_id == id) state->hot_id = 0;
+    if (state->active_id == id) state->active_id = 0;
+    if (state->pending_accessibility_focus_id == id)
+      state->pending_accessibility_focus_id = 0;
+    if (state->pending_accessibility_invoke_id == id)
+      state->pending_accessibility_invoke_id = 0;
+  }
+  state->popup = ReaderViewPopup_None;
+  state->restore_focus_id = 0;
+  state->note_dirty = 0;
+  return 1;
 }
 
 static void
@@ -1664,23 +2384,42 @@ rv_sync_selection_popup(RVBuildContext *ctx)
   ReaderViewState *state = ctx->input->state;
   const ReaderViewSelectionProjection *selection =
     &ctx->input->projection->selection;
-  UI0B32 active = (selection->flags & ReaderViewSelection_Active) != 0 &&
+  UI0B32 active = selection->status.state == ReaderViewLoad_Ready &&
+                  (selection->flags & ReaderViewSelection_Active) != 0 &&
                   selection->selection_key != 0;
   if (!active)
   {
+    if (state->popup == ReaderViewPopup_SelectionTools)
+    {
+      UI0ID restore_id = state->restore_focus_id;
+      UI0ID old_focus = state->focus_id;
+      rv_clear_prior_popup_interaction(state, restore_id);
+      state->popup = ReaderViewPopup_None;
+      state->restore_focus_id = 0;
+      ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
+      if (state->focus_id != old_focus)
+        ctx->frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+    }
     state->last_selection_key = 0;
     state->dismissed_selection_key = 0;
-    if (state->popup == ReaderViewPopup_SelectionTools)
-      state->popup = ReaderViewPopup_None;
     return;
   }
   if (state->last_selection_key != selection->selection_key)
   {
+    if (state->popup == ReaderViewPopup_SelectionTools)
+    {
+      UI0ID old_focus = state->focus_id;
+      rv_clear_prior_popup_interaction(state, state->restore_focus_id);
+      if (state->focus_id != old_focus)
+        ctx->frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+      ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
+    }
     state->last_selection_key = selection->selection_key;
     state->dismissed_selection_key = 0;
     if (state->popup == ReaderViewPopup_None)
     {
       state->popup = ReaderViewPopup_SelectionTools;
+      state->restore_focus_id = state->focus_id;
       ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
     }
   }
@@ -1707,22 +2446,130 @@ rv_toolbar_slot(UI0Rect rect, UI0S32 index, UI0S32 count)
 }
 
 static void
-rv_toggle_left_panel(RVBuildContext *ctx, ReaderViewLeftPanelMode mode)
+rv_focus_left_panel(RVBuildContext *ctx, ReaderViewLeftPanelMode mode)
+{
+  const ReaderViewTocProjection *toc = &ctx->input->projection->toc;
+  ReaderViewState *state = ctx->input->state;
+  UI0ID target = 0;
+  UI0B32 focus_visible =
+    ctx->signals.focus_id == 0 ||
+    ctx->signals.focus_visible_id == ctx->signals.focus_id;
+  if (mode == ReaderViewLeftPanel_Find)
+  {
+    target = rv_id(220, 0);
+  }
+  else if (mode == ReaderViewLeftPanel_Contents)
+  {
+    UI0S32 index;
+    for (index = 0; index < toc->row_count; ++index)
+    {
+      const ReaderViewTocRow *row = toc->rows + index;
+      if ((row->flags & ReaderViewRow_Enabled) != 0 &&
+          (row->flags & (ReaderViewRow_Current |
+                         ReaderViewRow_Selected)) != 0)
+      {
+        state->active_toc_key = row->key;
+        target = rv_id(212, row->key);
+        break;
+      }
+    }
+    if (target == 0)
+    {
+      for (index = 0; index < toc->row_count; ++index)
+      {
+        const ReaderViewTocRow *row = toc->rows + index;
+        if ((row->flags & ReaderViewRow_Enabled) != 0)
+        {
+          state->active_toc_key = row->key;
+          target = rv_id(212, row->key);
+          break;
+        }
+      }
+    }
+    if (target == 0) target = rv_id(201, 0);
+  }
+  if (target)
+    rv_move_focus(ctx, target, focus_visible);
+}
+
+static void
+rv_close_left_panel(RVBuildContext *ctx)
 {
   ReaderViewState *state = ctx->input->state;
-  state->left_panel = state->left_panel == mode ? ReaderViewLeftPanel_None : mode;
-  if (state->left_panel != ReaderViewLeftPanel_None)
-    state->most_recent_panel = ReaderViewPanel_Left;
+  UI0B32 focus_visible =
+    ctx->signals.focus_id != 0 &&
+    ctx->signals.focus_visible_id == ctx->signals.focus_id;
+  state->left_panel = ReaderViewLeftPanel_None;
+  state->pending_left_panel_focus = ReaderViewLeftPanel_None;
+  rv_reset_scroll_interaction(&state->toc_scroll, ctx->frame);
+  rv_reset_scroll_interaction(&state->find_scroll, ctx->frame);
+  if (state->left_panel_restore_focus_id)
+    rv_move_focus(ctx, state->left_panel_restore_focus_id, focus_visible);
+  state->left_panel_restore_focus_id = 0;
   ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged |
                              ReaderViewFrameChange_LayoutChanged;
 }
 
 static void
-rv_toggle_right_panel(RVBuildContext *ctx)
+rv_toggle_left_panel(RVBuildContext *ctx,
+                     ReaderViewLeftPanelMode mode,
+                     UI0ID source_id)
 {
   ReaderViewState *state = ctx->input->state;
-  state->right_panel_open = !state->right_panel_open;
-  if (state->right_panel_open) state->most_recent_panel = ReaderViewPanel_Right;
+  if (state->left_panel == mode)
+  {
+    rv_close_left_panel(ctx);
+    return;
+  }
+  rv_reset_scroll_interaction(&state->toc_scroll, ctx->frame);
+  rv_reset_scroll_interaction(&state->find_scroll, ctx->frame);
+  state->left_panel = mode;
+  state->most_recent_panel = ReaderViewPanel_Left;
+  if (source_id) state->left_panel_restore_focus_id = source_id;
+  if (mode == ReaderViewLeftPanel_Contents)
+    state->toc_scroll_y = 0;
+  else if (mode == ReaderViewLeftPanel_Find)
+    state->find_scroll_y = 0;
+  state->pending_left_panel_focus = mode;
+  if (ctx->input->layout->left_panel_visible)
+  {
+    rv_focus_left_panel(ctx, mode);
+    state->pending_left_panel_focus = ReaderViewLeftPanel_None;
+  }
+  ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged |
+                             ReaderViewFrameChange_LayoutChanged;
+}
+
+static void
+rv_close_right_panel(RVBuildContext *ctx)
+{
+  ReaderViewState *state = ctx->input->state;
+  UI0B32 focus_visible =
+    ctx->signals.focus_id != 0 &&
+    ctx->signals.focus_visible_id == ctx->signals.focus_id;
+  state->right_panel_open = 0;
+  rv_reset_scroll_interaction(&state->right_scroll, ctx->frame);
+  if (state->right_panel_restore_focus_id)
+    rv_move_focus(ctx, state->right_panel_restore_focus_id, focus_visible);
+  state->right_panel_restore_focus_id = 0;
+  ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged |
+                             ReaderViewFrameChange_LayoutChanged;
+}
+
+static void
+rv_toggle_right_panel(RVBuildContext *ctx, UI0ID source_id)
+{
+  ReaderViewState *state = ctx->input->state;
+  if (state->right_panel_open)
+  {
+    rv_close_right_panel(ctx);
+    return;
+  }
+  state->right_panel_open = 1;
+  rv_reset_scroll_interaction(&state->right_scroll, ctx->frame);
+  state->most_recent_panel = ReaderViewPanel_Right;
+  state->right_scroll_y = 0;
+  if (source_id) state->right_panel_restore_focus_id = source_id;
   ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged |
                              ReaderViewFrameChange_LayoutChanged;
 }
@@ -1942,7 +2789,7 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
         ctx->input->state->left_panel == ReaderViewLeftPanel_Contents,
         UI0IconKind_List))
   {
-    rv_toggle_left_panel(ctx, ReaderViewLeftPanel_Contents);
+    rv_toggle_left_panel(ctx, ReaderViewLeftPanel_Contents, rv_id(11, 0));
   }
   if (rv_has_feature(projection, ReaderViewFeature_Find) &&
       rv_toolbar_icon_control(
@@ -1953,7 +2800,7 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
         ctx->input->state->left_panel == ReaderViewLeftPanel_Find,
         UI0IconKind_Search))
   {
-    rv_toggle_left_panel(ctx, ReaderViewLeftPanel_Find);
+    rv_toggle_left_panel(ctx, ReaderViewLeftPanel_Find, rv_id(12, 0));
   }
   if (rv_has_feature(projection, ReaderViewFeature_History))
   {
@@ -2029,7 +2876,7 @@ rv_build_toolbar(RVBuildContext *ctx, ReaderViewLabels labels)
         ctx->input->state->right_panel_open,
         UI0IconKind_Notebook))
   {
-    rv_toggle_right_panel(ctx);
+    rv_toggle_right_panel(ctx, rv_id(17, 0));
   }
 
   if (rv_has_feature(projection, ReaderViewFeature_Bookmark))
@@ -2070,6 +2917,221 @@ rv_font_popup_rect(const ReaderViewBuildInput *input,
                    (row_count - 1) * style.row_gap);
 }
 
+static UI0S32
+rv_right_action_popup_count(const ReaderViewRightRow *row)
+{
+  UI0S32 result = 0;
+  if (!row) return 0;
+  if ((row->actions & ReaderViewRightAction_Activate) != 0) result += 1;
+  if (row->kind == ReaderViewRightRow_Highlight &&
+      (row->actions & ReaderViewRightAction_ToggleStar) != 0)
+    result += 1;
+  if (row->kind == ReaderViewRightRow_Note &&
+      (row->actions & ReaderViewRightAction_EditNote) != 0)
+    result += 1;
+  if ((row->actions & ReaderViewRightAction_Delete) != 0) result += 1;
+  return result;
+}
+
+static UI0B32
+rv_right_row_menu_rect(const ReaderViewBuildInput *input,
+                       ReaderViewKey key,
+                       UI0Rect *out_rect)
+{
+  const ReaderViewRightProjection *right;
+  UI0Rect panel;
+  UI0Rect list_rect;
+  UI0S32 row_y;
+  UI0S32 scroll_y;
+  UI0S32 index;
+  if (out_rect) *out_rect = rv_rect(0, 0, 0, 0);
+  if (!input || !input->state || !input->layout || !input->projection ||
+      !out_rect || key == 0 || !input->layout->right_panel_visible)
+    return 0;
+  right = &input->projection->right;
+  panel = input->layout->right_panel_rect;
+  list_rect = rv_rect(panel.x + 10,
+                      panel.y + RV_RIGHT_LIST_START_Y,
+                      rv_max(panel.w - 20, 1),
+                      rv_max(panel.h - RV_RIGHT_LIST_START_Y - 10, 0));
+  scroll_y = rv_clamp(input->state->right_scroll_y, 0,
+                      rv_max(rv_right_content_height(right) - list_rect.h, 0));
+  row_y = list_rect.y - scroll_y;
+  for (index = 0; index < right->row_count; ++index)
+  {
+    UI0Rect entry_rect;
+    if (rv_right_row_starts_section(right, index))
+      row_y += RV_RIGHT_SECTION_HEIGHT;
+    entry_rect = rv_rect(list_rect.x, row_y,
+                         list_rect.w, RV_RIGHT_ROW_HEIGHT);
+    if (right->rows[index].key == key)
+    {
+      UI0Rect visible_menu;
+      *out_rect = rv_rect(entry_rect.x + entry_rect.w - 38,
+                          entry_rect.y + (entry_rect.h - 28) / 2,
+                          30, 28);
+      visible_menu = ui0_rect_intersect(*out_rect, list_rect);
+      return visible_menu.w > 0 && visible_menu.h > 0;
+    }
+    row_y += RV_RIGHT_ROW_HEIGHT;
+    if (index + 1 < right->row_count &&
+        (right->rows[index + 1].flags &
+         ReaderViewRow_AttachedToPrevious) == 0)
+      row_y += RV_RIGHT_ROW_GAP;
+  }
+  return 0;
+}
+
+static UI0B32
+rv_right_row_owns_id(UI0ID id,
+                     ReaderViewKey key,
+                     UI0ID restore_id)
+{
+  if (id == 0 || key == 0) return 0;
+  return id == restore_id || id == rv_id(324, key) ||
+         id == rv_id(325, key) || id == rv_id(326, key) ||
+         id == rv_id(140, key) || id == rv_id(141, key) ||
+         id == rv_id(142, key) || id == rv_id(143, key);
+}
+
+static UI0B32
+rv_close_stale_right_action_popup(ReaderViewState *state,
+                                  UI0B32 clear_active_row)
+{
+  ReaderViewKey key;
+  UI0ID restore_id;
+  UI0B32 close_popup;
+  UI0B32 focus_changed = 0;
+  if (!state || state->right_menu_key == 0) return 0;
+  key = state->right_menu_key;
+  close_popup = state->popup == ReaderViewPopup_RightRowActions;
+  restore_id = close_popup ? state->restore_focus_id : 0;
+  if (rv_right_row_owns_id(state->focus_id, key, restore_id))
+  {
+    state->focus_id = 0;
+    state->focus_visible = 0;
+    focus_changed = 1;
+  }
+  if (rv_right_row_owns_id(state->hot_id, key, restore_id))
+    state->hot_id = 0;
+  if (rv_right_row_owns_id(state->active_id, key, restore_id))
+    state->active_id = 0;
+  if (rv_right_row_owns_id(
+        state->pending_accessibility_focus_id, key, restore_id))
+    state->pending_accessibility_focus_id = 0;
+  if (rv_right_row_owns_id(
+        state->pending_accessibility_invoke_id, key, restore_id))
+    state->pending_accessibility_invoke_id = 0;
+  if (clear_active_row && state->active_right_key == key)
+    state->active_right_key = 0;
+  if (close_popup)
+  {
+    state->popup = ReaderViewPopup_None;
+    state->restore_focus_id = 0;
+  }
+  state->right_menu_key = 0;
+  state->right_menu_kind = ReaderViewRightRow_Bookmark;
+  state->right_menu_actions = ReaderViewRightAction_None;
+  return focus_changed;
+}
+
+static UI0B32
+rv_right_filter_option_owns_id(UI0ID id)
+{
+  return id != 0 &&
+    (id == rv_id(135, (ReaderViewKey)ReaderViewRightFilter_All) ||
+     id == rv_id(135, (ReaderViewKey)ReaderViewRightFilter_Bookmarks) ||
+     id == rv_id(135, (ReaderViewKey)ReaderViewRightFilter_Highlights) ||
+     id == rv_id(135, (ReaderViewKey)ReaderViewRightFilter_Notes));
+}
+
+static UI0B32
+rv_close_stale_right_filter_popup(ReaderViewState *state)
+{
+  UI0ID restore_id;
+  UI0B32 focus_changed = 0;
+  if (!state || state->popup != ReaderViewPopup_RightFilter) return 0;
+  restore_id = state->restore_focus_id;
+  if (rv_right_filter_option_owns_id(state->focus_id))
+  {
+    if (state->focus_id != restore_id) focus_changed = 1;
+    state->focus_id = restore_id;
+    if (!restore_id) state->focus_visible = 0;
+  }
+  if (rv_right_filter_option_owns_id(state->hot_id)) state->hot_id = 0;
+  if (rv_right_filter_option_owns_id(state->active_id)) state->active_id = 0;
+  if (rv_right_filter_option_owns_id(
+        state->pending_accessibility_focus_id))
+    state->pending_accessibility_focus_id = 0;
+  if (rv_right_filter_option_owns_id(
+        state->pending_accessibility_invoke_id))
+    state->pending_accessibility_invoke_id = 0;
+  state->popup = ReaderViewPopup_None;
+  state->restore_focus_id = 0;
+  state->right_filter_menu_flags = 0;
+  return focus_changed;
+}
+
+static UI0Rect
+rv_right_actions_popup_rect(const ReaderViewBuildInput *input,
+                            const ReaderViewRightRow *row)
+{
+  UI0MenuStyle style = ui0_menu_style_from_resolved(input->theme);
+  UI0Rect panel = input->layout->right_panel_rect;
+  UI0Rect button = rv_rect(panel.x + panel.w - 48,
+                           panel.y + RV_RIGHT_LIST_START_Y,
+                           30, 28);
+  UI0S32 count = rv_max(rv_right_action_popup_count(row), 1);
+  UI0S32 body_padding_left = ui0_flat_row_popup_body_padding_left(
+    style.popup_padding_right,
+    UI0FlatRowIndicator_DefaultWidth,
+    UI0FlatRowIndicator_DefaultGap);
+  UI0S32 legacy_body_width = rv_max(
+    rv_min(176, rv_max(138, panel.w - 34)) - 16, 1);
+  UI0S32 menu_width = rv_max(legacy_body_width + body_padding_left +
+                              style.popup_padding_right, 1);
+  UI0S32 menu_height = rv_max(
+    style.popup_padding_y * 2 + count * style.row_height +
+      (count - 1) * style.row_gap, 1);
+  UI0S32 menu_x;
+  UI0S32 menu_y;
+  (void)rv_right_row_menu_rect(input,
+                               input->state->right_menu_key,
+                               &button);
+  menu_x = button.x - menu_width + button.w;
+  menu_y = button.y + button.h + 4;
+  if (menu_y + menu_height > panel.y + panel.h - 8)
+    menu_y = button.y - menu_height - 4;
+  menu_x = rv_clamp(menu_x,
+                    panel.x + 8,
+                    panel.x + panel.w - menu_width - 8);
+  menu_y = rv_clamp(menu_y,
+                    panel.y + 42,
+                    panel.y + panel.h - menu_height - 8);
+  return rv_rect(menu_x, menu_y, menu_width, menu_height);
+}
+
+static UI0Rect
+rv_right_action_popup_row(const ReaderViewBuildInput *input,
+                          UI0Rect popup,
+                          UI0S32 row)
+{
+  UI0MenuStyle style = ui0_menu_style_from_resolved(input->theme);
+  UI0FlatRowPopupGeometry geometry;
+  UI0FlatRowPopupRowRects rects;
+  memset(&geometry, 0, sizeof(geometry));
+  geometry.padding_left = style.popup_padding_right;
+  geometry.padding_right = style.popup_padding_right;
+  geometry.padding_top = style.popup_padding_y;
+  geometry.padding_bottom = style.popup_padding_y;
+  geometry.row_height = style.row_height;
+  geometry.row_gap = style.row_gap;
+  geometry.indicator_width = UI0FlatRowIndicator_DefaultWidth;
+  geometry.indicator_gap = UI0FlatRowIndicator_DefaultGap;
+  rects = ui0_flat_row_popup_row_rects(popup, geometry, row);
+  return rects.body_rect;
+}
+
 static UI0Rect
 rv_popup_rect(const ReaderViewBuildInput *input)
 {
@@ -2090,12 +3152,20 @@ rv_popup_rect(const ReaderViewBuildInput *input)
     result.y = input->layout->toolbar_rect.y + input->layout->toolbar_rect.h;
     result.h = rv_min(360, bounds.y + bounds.h - result.y - RV_INSET);
   }
+  else if (state->popup == ReaderViewPopup_RightFilter &&
+           input->layout->right_panel_visible)
+  {
+    result.x = input->layout->right_panel_rect.x + 10;
+    result.y = input->layout->right_panel_rect.y + 40;
+    result.w = rv_max(input->layout->right_panel_rect.w - 20, 80);
+    result.h = RV_RIGHT_FILTER_POPUP_HEIGHT;
+  }
   else if (state->popup == ReaderViewPopup_RightRowActions &&
            input->layout->right_panel_visible)
   {
-    result.x = input->layout->right_panel_rect.x + RV_INSET;
-    result.y = input->layout->right_panel_rect.y + 72;
-    result.w = input->layout->right_panel_rect.w - RV_INSET * 2;
+    result = rv_right_actions_popup_rect(
+      input,
+      rv_find_right_row(input->projection, state->right_menu_key));
   }
   else if (state->popup == ReaderViewPopup_SelectionTools)
   {
@@ -2186,8 +3256,7 @@ rv_build_setting_popup(RVBuildContext *ctx, UI0Rect popup)
                             ReaderViewChoice_Selected)) ==
           (ReaderViewChoice_Enabled | ReaderViewChoice_Selected))
       {
-        ctx->signals.focus_id = rv_id(100, choice->key);
-        ctx->signals.focus_visible_id = 0;
+        rv_move_focus(ctx, rv_id(100, choice->key), 0);
         break;
       }
     }
@@ -2208,8 +3277,7 @@ rv_build_setting_popup(RVBuildContext *ctx, UI0Rect popup)
                           choice->key, 0, setting->kind,
                           ReaderViewRightRow_Bookmark,
                           ReaderViewRightFilter_All, 0, rv_text(0, 0));
-      ctx->input->state->popup = ReaderViewPopup_None;
-      ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
+      rv_close_popup_and_restore_focus(ctx);
     }
   }
 }
@@ -2258,8 +3326,10 @@ rv_build_overflow_popup(RVBuildContext *ctx,
                         labels.annotations, 1,
                         ctx->input->state->right_panel_open, 0))
     {
+      UI0ID restore_id = ctx->input->state->restore_focus_id;
       ctx->input->state->popup = ReaderViewPopup_None;
-      rv_toggle_right_panel(ctx);
+      ctx->input->state->restore_focus_id = 0;
+      rv_toggle_right_panel(ctx, restore_id);
     }
   }
   if (rv_has_feature(projection, ReaderViewFeature_Bookmark) && row < 7)
@@ -2301,6 +3371,144 @@ rv_build_overflow_popup(RVBuildContext *ctx,
   }
 }
 
+static ReaderViewRightFilterFlags
+rv_filter_flag(ReaderViewRightFilter filter);
+
+static ReaderViewText
+rv_filter_label(ReaderViewLabels labels, ReaderViewRightFilter filter);
+
+static ReaderViewText
+rv_filter_label_with_count(RVBuildContext *ctx,
+                           ReaderViewLabels labels,
+                           ReaderViewRightFilter filter);
+
+static void
+rv_build_right_filter_popup(RVBuildContext *ctx,
+                            UI0Rect popup,
+                            ReaderViewLabels labels)
+{
+  static const ReaderViewRightFilter order[] = {
+    ReaderViewRightFilter_All,
+    ReaderViewRightFilter_Highlights,
+    ReaderViewRightFilter_Notes,
+    ReaderViewRightFilter_Bookmarks,
+  };
+  const ReaderViewRightProjection *right =
+    &ctx->input->projection->right;
+  ReaderViewState *state = ctx->input->state;
+  UI0S32 index;
+  UI0S32 slot = 0;
+  UI0B32 initialize_focus =
+    ctx->signals.focus_id == state->restore_focus_id;
+  UI0B32 selected_available =
+    (right->available_filters & rv_filter_flag(state->right_filter)) != 0;
+  for (index = 0; index < (UI0S32)(sizeof(order) / sizeof(order[0])); ++index)
+  {
+    ReaderViewRightFilter value = order[index];
+    UI0ID id;
+    UI0Rect row_rect;
+    if ((right->available_filters & rv_filter_flag(value)) == 0) continue;
+    id = rv_id(135, (ReaderViewKey)value);
+    row_rect = rv_rect(popup.x + 18,
+                       popup.y + 4 +
+                         slot * (RV_RIGHT_FILTER_ROW_HEIGHT +
+                                 RV_RIGHT_FILTER_ROW_GAP),
+                       rv_max(popup.w - 26, 1),
+                       RV_RIGHT_FILTER_ROW_HEIGHT);
+    if (initialize_focus &&
+        ((selected_available && state->right_filter == value) ||
+         (!selected_available && slot == 0)))
+    {
+      rv_move_focus(ctx, id, state->focus_visible);
+      initialize_focus = 0;
+    }
+    if (rv_popup_button(ctx, 135, (ReaderViewKey)value,
+                        row_rect,
+                        rv_filter_label_with_count(ctx, labels, value),
+                        1, state->right_filter == value, 0))
+    {
+      state->right_filter = value;
+      state->right_scroll_y = 0;
+      (void)rv_add_action(ctx, ReaderViewAction_RightFilterChanged,
+                          0, 0, ReaderViewSetting_FontFamily,
+                          ReaderViewRightRow_Bookmark, value, 0,
+                          rv_text(0, 0));
+      rv_close_popup_and_restore_focus(ctx);
+    }
+    rv_set_semantic_control(ctx, id,
+                            ReaderViewSemanticControl_RightFilterOption);
+    slot += 1;
+  }
+}
+
+static void
+rv_close_popup_and_restore_focus(RVBuildContext *ctx)
+{
+  ReaderViewState *state;
+  UI0ID restore_id;
+  UI0B32 focus_visible;
+  ReaderViewPopupKind dismissed;
+  UI0S32 index;
+  if (!ctx || !ctx->input || !ctx->input->state) return;
+  state = ctx->input->state;
+  dismissed = state->popup;
+  restore_id = state->restore_focus_id;
+  focus_visible = ctx->signals.focus_id != 0 &&
+    ctx->signals.focus_visible_id == ctx->signals.focus_id;
+  for (index = 0; index < ctx->control_count; ++index)
+  {
+    UI0ControlRecord *record = ctx->storage->control_records + index;
+    if (record->root == UI0RootKind_Normal) continue;
+    if (state->hot_id == record->id) state->hot_id = 0;
+    if (state->active_id == record->id) state->active_id = 0;
+    if (ctx->signals.hot_id == record->id) ctx->signals.hot_id = 0;
+    if (ctx->signals.active_id == record->id) ctx->signals.active_id = 0;
+    if (state->pending_accessibility_focus_id == record->id)
+      state->pending_accessibility_focus_id = 0;
+    if (state->pending_accessibility_invoke_id == record->id)
+      state->pending_accessibility_invoke_id = 0;
+  }
+  rv_clear_prior_popup_interaction(state, restore_id);
+  state->popup = ReaderViewPopup_None;
+  state->restore_focus_id = 0;
+  if (dismissed == ReaderViewPopup_RightFilter)
+    state->right_filter_menu_flags = 0;
+  ui0_signal_set_root(&ctx->signals, UI0RootKind_Popup,
+                      rv_rect(0, 0, 0, 0), 0);
+  ui0_signal_set_root(&ctx->signals, UI0RootKind_Modal,
+                      rv_rect(0, 0, 0, 0), 0);
+  ui0_signal_resolve_roots(&ctx->signals);
+  rv_unblock_built_normal_root(ctx);
+  rv_move_focus(ctx, restore_id, focus_visible);
+  ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
+}
+
+static void
+rv_initialize_popup_item_focus(RVBuildContext *ctx,
+                               UI0ID id,
+                               UI0B32 *initialize_focus)
+{
+  UI0B32 focus_visible;
+  if (!ctx || !initialize_focus || !*initialize_focus) return;
+  focus_visible = ctx->signals.focus_id != 0 &&
+    ctx->signals.focus_visible_id == ctx->signals.focus_id;
+  rv_move_focus(ctx, id, focus_visible);
+  *initialize_focus = 0;
+}
+
+static ReaderViewText
+rv_right_delete_label(ReaderViewLabels labels,
+                      ReaderViewRightRowKind kind)
+{
+  switch (kind)
+  {
+    case ReaderViewRightRow_Bookmark: return labels.delete_bookmark;
+    case ReaderViewRightRow_Note: return labels.delete_note;
+    case ReaderViewRightRow_Highlight: return labels.delete_highlight;
+    default: return labels.delete_value;
+  }
+}
+
 static void
 rv_build_right_actions_popup(RVBuildContext *ctx,
                              UI0Rect popup,
@@ -2309,38 +3517,80 @@ rv_build_right_actions_popup(RVBuildContext *ctx,
   const ReaderViewRightRow *row = rv_find_right_row(
     ctx->input->projection, ctx->input->state->right_menu_key);
   UI0S32 item = 0;
+  UI0B32 initialize_focus =
+    ctx->signals.focus_id == ctx->input->state->restore_focus_id;
   if (!row)
   {
     ctx->input->state->popup = ReaderViewPopup_None;
     return;
   }
-  if ((row->actions & ReaderViewRightAction_Activate) != 0 &&
-      rv_popup_button(ctx, 140, row->key, rv_popup_row(popup, item++),
-                      labels.go_to, 1, 0, 0))
-    (void)rv_add_action(ctx, ReaderViewAction_ActivateRightRow,
-                        row->key, 0, ReaderViewSetting_FontFamily, row->kind,
-                        ReaderViewRightFilter_All, 0, rv_text(0, 0));
-  if ((row->actions & ReaderViewRightAction_ToggleStar) != 0 &&
-      rv_popup_button(ctx, 141, row->key, rv_popup_row(popup, item++),
-                      (row->flags & ReaderViewRow_Starred) ?
-                        labels.unstar : labels.star, 1, 0, 0))
-    (void)rv_add_action(ctx, ReaderViewAction_ToggleRightRowStar,
-                        row->key, 0, ReaderViewSetting_FontFamily, row->kind,
-                        ReaderViewRightFilter_All, 0, rv_text(0, 0));
-  if ((row->actions & ReaderViewRightAction_EditNote) != 0 &&
-      rv_popup_button(ctx, 142, row->key, rv_popup_row(popup, item++),
-                      labels.edit_note, 1, 0, 0))
+  if ((row->actions & ReaderViewRightAction_Activate) != 0)
   {
-    (void)rv_add_action(ctx, ReaderViewAction_EditRightRowNote,
-                        row->key, 0, ReaderViewSetting_FontFamily, row->kind,
-                        ReaderViewRightFilter_All, 0, rv_text(0, 0));
+    rv_initialize_popup_item_focus(ctx, rv_id(140, row->key),
+                                   &initialize_focus);
+    if (rv_popup_button(ctx, 140, row->key,
+                        rv_right_action_popup_row(ctx->input, popup, item++),
+                        labels.go_to, 1, 0, 0))
+    {
+      rv_close_popup_and_restore_focus(ctx);
+      (void)rv_add_action(ctx, ReaderViewAction_ActivateRightRow,
+                          row->key, 0, ReaderViewSetting_FontFamily, row->kind,
+                          ReaderViewRightFilter_All, 0, rv_text(0, 0));
+    }
+    rv_set_semantic_control(ctx, rv_id(140, row->key),
+                            ReaderViewSemanticControl_RightActionGoTo);
   }
-  if ((row->actions & ReaderViewRightAction_Delete) != 0 &&
-      rv_popup_button(ctx, 143, row->key, rv_popup_row(popup, item++),
-                      labels.delete_value, 1, 0, 1))
-    (void)rv_add_action(ctx, ReaderViewAction_DeleteRightRow,
-                        row->key, 0, ReaderViewSetting_FontFamily, row->kind,
-                        ReaderViewRightFilter_All, 0, rv_text(0, 0));
+  if (row->kind == ReaderViewRightRow_Highlight &&
+      (row->actions & ReaderViewRightAction_ToggleStar) != 0)
+  {
+    rv_initialize_popup_item_focus(ctx, rv_id(141, row->key),
+                                   &initialize_focus);
+    if (rv_popup_button(ctx, 141, row->key,
+                        rv_right_action_popup_row(ctx->input, popup, item++),
+                        (row->flags & ReaderViewRow_Starred) ?
+                          labels.unstar : labels.star, 1, 0, 0))
+    {
+      rv_close_popup_and_restore_focus(ctx);
+      (void)rv_add_action(ctx, ReaderViewAction_ToggleRightRowStar,
+                          row->key, 0, ReaderViewSetting_FontFamily, row->kind,
+                          ReaderViewRightFilter_All, 0, rv_text(0, 0));
+    }
+    rv_set_semantic_control(ctx, rv_id(141, row->key),
+                            ReaderViewSemanticControl_RightActionToggleStar);
+  }
+  if (row->kind == ReaderViewRightRow_Note &&
+      (row->actions & ReaderViewRightAction_EditNote) != 0)
+  {
+    rv_initialize_popup_item_focus(ctx, rv_id(142, row->key),
+                                   &initialize_focus);
+    if (rv_popup_button(ctx, 142, row->key,
+                        rv_right_action_popup_row(ctx->input, popup, item++),
+                        labels.edit_note, 1, 0, 0))
+    {
+      rv_close_popup_and_restore_focus(ctx);
+      (void)rv_add_action(ctx, ReaderViewAction_EditRightRowNote,
+                          row->key, 0, ReaderViewSetting_FontFamily, row->kind,
+                          ReaderViewRightFilter_All, 0, rv_text(0, 0));
+    }
+    rv_set_semantic_control(ctx, rv_id(142, row->key),
+                            ReaderViewSemanticControl_RightActionEditNote);
+  }
+  if ((row->actions & ReaderViewRightAction_Delete) != 0)
+  {
+    rv_initialize_popup_item_focus(ctx, rv_id(143, row->key),
+                                   &initialize_focus);
+    if (rv_popup_button(ctx, 143, row->key,
+                        rv_right_action_popup_row(ctx->input, popup, item++),
+                        rv_right_delete_label(labels, row->kind), 1, 0, 1))
+    {
+      rv_close_popup_and_restore_focus(ctx);
+      (void)rv_add_action(ctx, ReaderViewAction_DeleteRightRow,
+                          row->key, 0, ReaderViewSetting_FontFamily, row->kind,
+                          ReaderViewRightFilter_All, 0, rv_text(0, 0));
+    }
+    rv_set_semantic_control(ctx, rv_id(143, row->key),
+                            ReaderViewSemanticControl_RightActionDelete);
+  }
 }
 
 static void
@@ -2490,16 +3740,37 @@ rv_scroll_region(RVBuildContext *ctx,
 {
   UI0ScrollSpec spec;
   UI0ScrollResult result;
+  UI0S32 old_scroll_y = *scroll_y;
+  UI0ScrollState old_state = *state;
   memset(&spec, 0, sizeof(spec));
   spec.id = id;
   spec.root = UI0RootKind_Normal;
   spec.viewport_rect = viewport;
   spec.content_h = content_h;
   spec.scroll_y = *scroll_y;
-  spec.wheel_delta_y = ctx->input->input->ui.wheel_delta_y;
+  /* The shared signal input already contributes the frame wheel delta. */
+  spec.wheel_delta_y = 0;
   result = ui0_scroll_region(&ctx->scrolls, &ctx->signals, spec, state);
   *scroll_y = result.scroll_y;
+  if (*scroll_y != old_scroll_y ||
+      state->active_thumb_id != old_state.active_thumb_id ||
+      state->drag_start_pointer_y != old_state.drag_start_pointer_y ||
+      state->drag_start_scroll_y != old_state.drag_start_scroll_y)
+    ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
   return result.scroll_y;
+}
+
+static UI0Rect
+rv_scroll_content_clip(const RVBuildContext *ctx, UI0Rect viewport)
+{
+  const UI0ScrollRecord *record;
+  UI0S32 right;
+  if (!ctx || ctx->scrolls.record_count <= 0) return viewport;
+  record = ctx->scrolls.records + (ctx->scrolls.record_count - 1);
+  if (!rv_rect_intersects(record->track_rect, viewport)) return viewport;
+  right = rv_min(viewport.x + viewport.w, record->track_rect.x);
+  return rv_rect(viewport.x, viewport.y,
+                 rv_max(right - viewport.x, 0), viewport.h);
 }
 
 static void
@@ -2509,12 +3780,20 @@ rv_build_toc_panel(RVBuildContext *ctx,
                    ReaderViewLabels labels)
 {
   const ReaderViewTocProjection *toc = &ctx->input->projection->toc;
+  ReaderViewState *state = ctx->input->state;
   UI0S32 scroll_y;
   UI0S32 index;
-  UI0S32 content_h = toc->row_count * RV_ROW_HEIGHT;
-  scroll_y = rv_scroll_region(ctx, rv_id(210, 0), list_rect, content_h,
-                              &ctx->input->state->toc_scroll_y,
-                              &ctx->input->state->toc_scroll);
+  UI0S32 visual_stride = RV_NAV_CONTENTS_VISUAL_ROW_HEIGHT +
+                         RV_NAV_CONTENTS_VISUAL_ROW_GAP;
+  UI0S32 content_h = toc->row_count > 0 ?
+    toc->row_count * RV_NAV_CONTENTS_VISUAL_ROW_HEIGHT +
+      (toc->row_count - 1) * RV_NAV_CONTENTS_VISUAL_ROW_GAP : 0;
+  UI0Rect visual_clip = rv_rect(
+    list_rect.x,
+    panel.y + RV_NAV_CONTENTS_VISUAL_CLIP_Y,
+    list_rect.w,
+    rv_max(panel.h - RV_NAV_CONTENTS_VISUAL_CLIP_Y -
+             RV_NAV_BOTTOM_PAD, 0));
   if (toc->status.state != ReaderViewLoad_Ready)
   {
     rv_add_status(ctx, ctx->left_panel_id, 211, list_rect, toc->status);
@@ -2522,69 +3801,329 @@ rv_build_toc_panel(RVBuildContext *ctx,
   }
   if (toc->row_count == 0)
   {
-    ReaderViewSurfaceStatus empty = toc->status;
-    empty.state = ReaderViewLoad_Empty;
-    rv_add_status(ctx, ctx->left_panel_id, 211, list_rect, empty);
+    UI0ID empty_id = rv_id(211, 0);
+    rv_add_text_record(
+      ctx, empty_id, ctx->left_panel_id,
+      rv_rect(list_rect.x, panel.y + RV_NAV_CONTENTS_EMPTY_Y,
+              list_rect.w, RV_NAV_CONTENTS_EMPTY_HEIGHT),
+      labels.no_contents,
+      ReaderViewSemantic_Status, ReaderViewSemantic_Enabled, 0);
+    rv_add_text_override(ctx, empty_id, UI0TextAlignX_Start,
+                         UI0TypographyRole_Body,
+                         ctx->input->theme->colors[UI0ColorRole_TextMuted]);
     return;
   }
   for (index = 0; index < toc->row_count; ++index)
   {
     const ReaderViewTocRow *row = toc->rows + index;
-    UI0Rect row_rect = rv_rect(list_rect.x + rv_min((UI0S32)row->depth, 6) * 12,
-                               list_rect.y + index * RV_ROW_HEIGHT - scroll_y,
-                               list_rect.w - rv_min((UI0S32)row->depth, 6) * 12 - 12,
-                               RV_ROW_HEIGHT - 2);
-    UI0ID id = rv_id(212, row->key);
-    if (!rv_rect_intersects(row_rect, list_rect)) continue;
-    if (rv_add_control(ctx, id, ctx->left_panel_id,
-                       UI0ControlKind_TreeRow,
-                       ReaderViewSemantic_ListItem,
-                       UI0RootKind_Normal,
-                       row_rect,
-                       row->label,
-                       row->detail,
-                       row->key,
-                       (row->flags & ReaderViewRow_Enabled) != 0,
-                       (row->flags & (ReaderViewRow_Selected |
-                                      ReaderViewRow_Current)) != 0,
-                       0, 0, 0))
+    if (ctx->signals.focus_id == rv_id(212, row->key))
     {
-      ctx->input->state->active_toc_key = row->key;
+      UI0S32 row_top = index * visual_stride;
+      UI0S32 row_bottom = row_top + RV_NAV_CONTENTS_VISUAL_ROW_HEIGHT;
+      UI0S32 old_scroll_y = state->toc_scroll_y;
+      if (row_top < state->toc_scroll_y)
+        state->toc_scroll_y = row_top;
+      else if (row_bottom > state->toc_scroll_y + visual_clip.h)
+        state->toc_scroll_y = rv_max(0, row_bottom - visual_clip.h);
+      if (state->toc_scroll_y != old_scroll_y)
+        ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
+      break;
+    }
+  }
+  scroll_y = rv_scroll_region(ctx, rv_id(210, 0), visual_clip, content_h,
+                              &state->toc_scroll_y,
+                              &state->toc_scroll);
+  visual_clip = rv_scroll_content_clip(ctx, visual_clip);
+  for (index = 0; index < toc->row_count; ++index)
+  {
+    const ReaderViewTocRow *row = toc->rows + index;
+    UI0Rect visual_outer = rv_rect(
+      visual_clip.x,
+      visual_clip.y + index * visual_stride - scroll_y,
+      visual_clip.w,
+      RV_NAV_CONTENTS_VISUAL_ROW_HEIGHT);
+    UI0Rect semantic_rect = rv_rect(
+      list_rect.x,
+      list_rect.y + index * RV_NAV_CONTENTS_SEMANTIC_ROW_HEIGHT - scroll_y,
+      list_rect.w,
+      RV_NAV_CONTENTS_SEMANTIC_ROW_HEIGHT);
+    UI0Rect row_rect = visual_outer;
+    UI0Rect hit_rect = ui0_rect_intersect(visual_outer, visual_clip);
+    UI0ID id = rv_id(212, row->key);
+    UI0S32 control_index = ctx->control_count;
+    if (hit_rect.w <= 0 || hit_rect.h <= 0) continue;
+    if (rv_add_control_with_hit_rect(
+          ctx, id, ctx->left_panel_id,
+          UI0ControlKind_SidenavRow,
+          ReaderViewSemantic_ListItem,
+          UI0RootKind_Normal,
+          row_rect, hit_rect,
+          row->label, row->detail, row->key,
+          (row->flags & ReaderViewRow_Enabled) != 0,
+          (row->flags & (ReaderViewRow_Selected |
+                         ReaderViewRow_Current)) != 0,
+          0, 0, 0))
+    {
+      state->active_toc_key = row->key;
       (void)rv_add_action(ctx, ReaderViewAction_ActivateTocRow,
                           row->key, 0, ReaderViewSetting_FontFamily,
                           ReaderViewRightRow_Bookmark,
                           ReaderViewRightFilter_All, 0, rv_text(0, 0));
     }
+    if (ctx->control_count > control_index)
+    {
+      UI0ControlRecord *record =
+        ctx->storage->control_records + control_index;
+      UI0Rect visual_body = ui0_flat_row_body_rect(
+        visual_outer,
+        RV_NAV_CONTENTS_VISUAL_INDICATOR_WIDTH,
+        RV_NAV_CONTENTS_VISUAL_INDICATOR_GAP);
+      uint64_t indent_u64 =
+        (uint64_t)row->depth * RV_NAV_CONTENTS_VISUAL_INDENT;
+      UI0S32 maximum_indent = rv_max(
+        visual_body.w -
+          (RV_NAV_CONTENTS_VISUAL_PADDING_X * 2 +
+           RV_NAV_CONTENTS_VISUAL_EXPANDER +
+           RV_NAV_CONTENTS_VISUAL_EXPANDER_GAP + 1), 0);
+      UI0S32 visual_indent = indent_u64 > (uint64_t)maximum_indent ?
+        maximum_indent : (UI0S32)indent_u64;
+      UI0S32 expander_x = visual_body.x +
+        RV_NAV_CONTENTS_VISUAL_PADDING_X + visual_indent;
+      UI0B32 has_children = index + 1 < toc->row_count &&
+        toc->rows[index + 1].depth > row->depth;
+      UI0Rect expander_rect = has_children ?
+        rv_rect(expander_x,
+                visual_body.y +
+                  (visual_body.h - RV_NAV_CONTENTS_VISUAL_EXPANDER) / 2,
+                RV_NAV_CONTENTS_VISUAL_EXPANDER,
+                RV_NAV_CONTENTS_VISUAL_EXPANDER) :
+        rv_rect(0, 0, 0, 0);
+      UI0S32 text_x = expander_x +
+        RV_NAV_CONTENTS_VISUAL_EXPANDER +
+        RV_NAV_CONTENTS_VISUAL_EXPANDER_GAP;
+      UI0S32 text_right = visual_body.x + visual_body.w -
+        RV_NAV_CONTENTS_VISUAL_PADDING_X;
+      record->clip_rect = hit_rect;
+      record->text_rect = rv_rect(text_x,
+                                  visual_body.y,
+                                  rv_max(text_right - text_x, 0),
+                                  visual_body.h);
+      rv_add_sidenav_visual(
+        ctx,
+        id,
+        rv_id(213, 0),
+        index,
+        row->depth > 0x7fffffffu ?
+          0x7fffffff : (UI0S32)row->depth,
+        visual_outer,
+        visual_body,
+        visual_clip,
+        record->text_rect,
+        ui0_flat_row_indicator_rect(
+          visual_body,
+          RV_NAV_CONTENTS_VISUAL_INDICATOR_WIDTH,
+          RV_NAV_CONTENTS_VISUAL_INDICATOR_GAP),
+        expander_rect,
+        row->label,
+        (row->flags & (ReaderViewRow_Selected |
+                       ReaderViewRow_Current)) != 0,
+        (row->flags & ReaderViewRow_Current) != 0,
+        has_children,
+        has_children);
+    }
+    rv_set_semantic_rect(ctx, id, semantic_rect);
+    rv_set_semantic_control(ctx, id, ReaderViewSemanticControl_TocRow);
+    if ((row->flags & ReaderViewRow_Current) != 0)
+      rv_add_semantic_flags_for_id(ctx, id, ReaderViewSemantic_Current);
   }
-  (void)panel;
-  (void)labels;
 }
 
 static void
-rv_process_find_input(RVBuildContext *ctx)
+rv_add_find_input(RVBuildContext *ctx,
+                  UI0Rect semantic_rect,
+                  UI0Rect field_rect,
+                  ReaderViewLabels labels)
 {
   ReaderViewState *state = ctx->input->state;
+  UI0ID input_id = rv_id(220, 0);
+  UI0BoxDesc box_desc;
+  UI0S32 box_index;
+  UI0TextInputSpec spec;
   UI0TextInputBuffer buffer;
-  UI0B32 committed = 0;
-  UI0B32 edited;
+  UI0TextInputResult result;
+  UI0ControlRecord *control;
+  ReaderViewText query;
+  ReaderViewText display_text;
+  UI0B32 blocked;
+
+  if (state->pending_accessibility_focus_id == input_id)
+  {
+    state->pending_accessibility_focus_id = 0;
+    if (state->popup == ReaderViewPopup_None)
+      rv_move_focus(ctx, input_id, 1);
+  }
+  /* SearchBox invocation remains a bounded no-op, as before this adoption. */
+  if (state->pending_accessibility_invoke_id == input_id)
+    state->pending_accessibility_invoke_id = 0;
+
+  box_desc = ui0_box_desc("reader.find.input",
+                          UI0LayoutInvalidIndex,
+                          UI0Axis_X,
+                          ui0_size_fixed(field_rect.w),
+                          ui0_size_fixed(field_rect.h));
+  box_index = ui0_layout_add_box(&ctx->input_layout, &box_desc);
+  if (box_index == UI0LayoutInvalidIndex ||
+      !ui0_layout_solve(&ctx->input_layout, box_index, field_rect))
+  {
+    ctx->frame->error_flags |= ReaderViewFrameError_RecordCap;
+    return;
+  }
+
+  memset(&spec, 0, sizeof(spec));
+  spec.id = input_id;
+  spec.box_index = box_index;
+  spec.root = UI0RootKind_Normal;
+  spec.placeholder = labels.find_placeholder.data;
+  spec.placeholder_len = labels.find_placeholder.size;
+  spec.frame_input = ctx->input->input->find_text;
   buffer.data = state->find_query;
   buffer.length = &state->find_query_length;
   buffer.cap = READER_VIEW_FIND_QUERY_CAP;
-  edited = rv_apply_text_input(&buffer, &state->find_input,
-                               &ctx->input->input->find_text,
-                               &committed);
-  if (edited)
+  result = ui0_text_input(&ctx->text_inputs,
+                          &ctx->signals,
+                          &ctx->input_layout,
+                          spec,
+                          &buffer,
+                          &state->find_input);
+  query = reader_view_find_query(state);
+  if (query.size == 0 && ctx->text_inputs.record_count > 0)
+  {
+    UI0TextInputRecord *record = ctx->storage->text_input_records +
+      (ctx->text_inputs.record_count - 1);
+    /* Frozen a6b paints `Search in book|` while the empty input is focused. */
+    record->state |= UI0TextInputState_PlaceholderVisible;
+    record->text_draw_rect.w = record->placeholder_width;
+    result.state |= UI0TextInputState_PlaceholderVisible;
+  }
+  display_text = query.size > 0 ? query : labels.find_placeholder;
+  blocked = (result.state & UI0TextInputState_BlockedByRoot) != 0;
+
+  if (ctx->control_count >= READER_VIEW_CONTROL_CAP)
+  {
+    ctx->frame->error_flags |= ReaderViewFrameError_RecordCap;
+    return;
+  }
+  control = ctx->storage->control_records + ctx->control_count++;
+  memset(control, 0, sizeof(*control));
+  control->id = input_id;
+  control->kind = UI0ControlKind_TextInput;
+  control->box_index = box_index;
+  control->root = UI0RootKind_Normal;
+  control->state = rv_control_state(result.signal, UI0Control_None, 0, 0);
+  control->signal_flags = result.signal.flags;
+  control->rect = semantic_rect;
+  control->clip_rect = field_rect;
+  if (ctx->text_inputs.record_count > 0)
+    control->text_rect = ctx->storage->text_input_records[0].text_rect;
+  control->label_hash = rv_text_hash(display_text);
+  control->label_len = display_text.size;
+  (void)rv_add_binding(ctx, input_id, display_text,
+                       ReaderViewTextStyle_Default);
+  (void)rv_add_semantic(ctx,
+                        input_id,
+                        ctx->left_panel_id,
+                        ReaderViewSemantic_SearchBox,
+                        rv_semantic_flags(ctx, input_id,
+                                          !blocked, !blocked,
+                                          0, 0, 0),
+                        semantic_rect,
+                        labels.search_input,
+                        query,
+                        0, 0, 0, 0);
+  rv_set_semantic_control(ctx, input_id,
+                          ReaderViewSemanticControl_FindInput);
+
+  if (result.edited)
     (void)rv_add_action(ctx, ReaderViewAction_FindChanged, 0, 0,
-                        ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
-                        ReaderViewRightFilter_All, 0,
-                        reader_view_find_query(state));
-  if (committed)
+                        ReaderViewSetting_FontFamily,
+                        ReaderViewRightRow_Bookmark,
+                        ReaderViewRightFilter_All, 0, query);
+  if (result.committed)
     (void)rv_add_action(ctx, ReaderViewAction_FindCommitted, 0, 0,
-                        ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
-                        ReaderViewRightFilter_All, 0,
-                        reader_view_find_query(state));
-  if (edited || committed)
+                        ReaderViewSetting_FontFamily,
+                        ReaderViewRightRow_Bookmark,
+                        ReaderViewRightFilter_All, 0, query);
+  if (result.edited || result.committed)
     ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
+}
+
+static void
+rv_sync_cleared_find_input(RVBuildContext *ctx,
+                           UI0ID input_id,
+                           ReaderViewText placeholder)
+{
+  ReaderViewState *state = ctx->input->state;
+  UI0ControlRecord *control = rv_control_record_for_id(ctx, input_id);
+  UI0TextInputRecord *record = ctx->text_inputs.record_count > 0 ?
+    ctx->storage->text_input_records : 0;
+  UI0S32 index;
+  if (control)
+  {
+    control->state &= ~(UI0ControlState_Focused |
+                        UI0ControlState_FocusVisible);
+    if (ctx->signals.focus_id == input_id)
+      control->state |= UI0ControlState_Focused;
+    if (ctx->signals.focus_visible_id == input_id)
+      control->state |= UI0ControlState_FocusVisible;
+  }
+  if (record && record->id == input_id)
+  {
+    record->state &= ~(UI0TextInputState_Focused |
+                       UI0TextInputState_FocusVisible |
+                       UI0TextInputState_HasSelection |
+                       UI0TextInputState_TextClipped |
+                       UI0TextInputState_SelectionClipped |
+                       UI0TextInputState_CaretClipped);
+    if (ctx->signals.focus_id == input_id)
+      record->state |= UI0TextInputState_Focused;
+    if (ctx->signals.focus_visible_id == input_id)
+      record->state |= UI0TextInputState_FocusVisible;
+    record->state |= UI0TextInputState_PlaceholderVisible;
+    record->text_hash = rv_text_hash(rv_text("", 0));
+    record->text_len = 0;
+    record->caret = 0;
+    record->selection_start = 0;
+    record->selection_end = 0;
+    record->scroll_x = 0;
+    record->full_text_width = 0;
+    record->visible_text_width = 0;
+    record->text_draw_rect = rv_rect(record->text_rect.x,
+                                     record->rect.y,
+                                     record->placeholder_width,
+                                     record->rect.h);
+    record->selection_rect = rv_rect(0, 0, 0, 0);
+    record->caret_rect = ui0_text_input_caret_rect(
+      ctx->text_inputs.style.measure,
+      record->text_rect,
+      0,
+      state->find_query,
+      0,
+      0,
+      ctx->text_inputs.style.caret_width);
+  }
+  rv_set_control_visual_text(ctx, input_id, placeholder);
+  rv_set_semantic_value(ctx, input_id, reader_view_find_query(state));
+  for (index = ctx->semantic_count - 1; index >= 0; --index)
+  {
+    ReaderViewSemanticNode *node = ctx->storage->semantic_nodes + index;
+    if (node->id == input_id)
+    {
+      node->flags &= ~ReaderViewSemantic_Focused;
+      if (ctx->signals.focus_id == input_id)
+        node->flags |= ReaderViewSemantic_Focused;
+      break;
+    }
+  }
 }
 
 static void
@@ -2595,30 +4134,46 @@ rv_build_find_panel(RVBuildContext *ctx,
 {
   const ReaderViewFindProjection *find = &ctx->input->projection->find;
   ReaderViewState *state = ctx->input->state;
-  UI0Rect input_rect = rv_rect(panel.x + RV_INSET, panel.y + 54,
-                               panel.w - RV_INSET * 2 - 58,
-                               RV_CONTROL_HEIGHT);
-  UI0Rect clear_rect = rv_rect(input_rect.x + input_rect.w + 4, input_rect.y,
-                               54, RV_CONTROL_HEIGHT);
-  UI0Rect step_rect = rv_rect(panel.x + RV_INSET, input_rect.y + 38,
-                              panel.w - RV_INSET * 2, RV_CONTROL_HEIGHT);
+  UI0Rect body = rv_rect(panel.x + RV_NAV_RAIL_WIDTH,
+                         panel.y,
+                         rv_max(panel.w - RV_NAV_RAIL_WIDTH, 1),
+                         panel.h);
+  UI0Rect input_rect = rv_rect(body.x + 20, body.y + 48,
+                               rv_max(body.w - 40, 1),
+                               RV_NAV_INPUT_HEIGHT);
+  UI0Rect input_hit_rect = rv_rect(input_rect.x, input_rect.y,
+                                   rv_max(input_rect.w - 34, 1),
+                                   input_rect.h);
+  UI0Rect clear_rect = rv_rect(input_rect.x + input_rect.w - 30,
+                               input_rect.y + 5,
+                               24, 24);
   UI0S32 scroll_y;
   UI0S32 index;
   UI0S32 content_h;
-  rv_process_find_input(ctx);
-  (void)rv_add_control(ctx, rv_id(220, 0), ctx->left_panel_id,
-                       UI0ControlKind_TextInput,
-                       ReaderViewSemantic_SearchBox,
-                       UI0RootKind_Normal,
-                       input_rect,
-                       reader_view_find_query(state),
-                       find->committed_query,
-                       0, 1, 0, 0, 0, 0);
-  if (rv_add_control(ctx, rv_id(221, 0), ctx->left_panel_id,
-                     UI0ControlKind_TextButton, ReaderViewSemantic_Button,
-                     UI0RootKind_Normal, clear_rect, labels.clear,
-                     rv_text(0, 0), 0, state->find_query_length > 0,
-                     0, 0, 0, 0))
+  UI0Rect content_clip;
+  UI0ID input_id = rv_id(220, 0);
+  UI0ID clear_id = rv_id(221, 0);
+  UI0S32 clear_control_index;
+  UI0B32 clear_accessibility_invoke;
+  ReaderViewText query;
+  ReaderViewText ready_status;
+  rv_add_find_input(ctx, input_rect, input_hit_rect, labels);
+  query = reader_view_find_query(state);
+  ready_status = find->status.message;
+  clear_control_index = ctx->control_count;
+  clear_accessibility_invoke =
+    state->pending_accessibility_invoke_id == clear_id;
+  if (rv_add_icon_control(ctx, clear_id, ctx->left_panel_id,
+                          UI0ControlKind_IconButton,
+                          ReaderViewSemantic_Button,
+                          UI0RootKind_Normal,
+                          clear_rect, clear_rect,
+                          labels.clear_search, rv_text(0, 0), 0,
+                          state->find_query_length > 0,
+                          0, 0, 0, 0,
+                          UI0IconKind_Close,
+                          rv_toolbar_icon_rect(clear_rect),
+                          state->find_query_length > 0))
   {
     state->find_query_length = 0;
     state->find_query[0] = 0;
@@ -2629,62 +4184,96 @@ rv_build_find_panel(RVBuildContext *ctx,
                         ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                         ReaderViewRightFilter_All, 0,
                         reader_view_find_query(state));
+    rv_move_focus(ctx, input_id,
+      clear_accessibility_invoke ||
+      (ctx->control_count > clear_control_index &&
+       (ctx->storage->control_records[clear_control_index].state &
+        UI0ControlState_KeyboardActivated) != 0));
+    rv_sync_cleared_find_input(ctx, input_id, labels.find_placeholder);
+    query = reader_view_find_query(state);
+    ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
   }
-  if (rv_add_control(ctx, rv_id(222, 0), ctx->left_panel_id,
-                     UI0ControlKind_IconButton, ReaderViewSemantic_Button,
-                     UI0RootKind_Normal,
-                     rv_rect(step_rect.x, step_rect.y, step_rect.w / 2 - 2,
-                             step_rect.h),
-                     labels.previous_match, rv_text(0, 0), 0,
-                     find->can_step_previous, 0, 0, 0, 0))
-    (void)rv_add_action(ctx, ReaderViewAction_FindPrevious, 0, 0,
-                        ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
-                        ReaderViewRightFilter_All, 0, rv_text(0, 0));
-  if (rv_add_control(ctx, rv_id(223, 0), ctx->left_panel_id,
-                     UI0ControlKind_IconButton, ReaderViewSemantic_Button,
-                     UI0RootKind_Normal,
-                     rv_rect(step_rect.x + step_rect.w / 2 + 2, step_rect.y,
-                             step_rect.w - step_rect.w / 2 - 2, step_rect.h),
-                     labels.next_match, rv_text(0, 0), 0,
-                     find->can_step_next, 0, 0, 0, 0))
-    (void)rv_add_action(ctx, ReaderViewAction_FindNext, 0, 0,
-                        ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
-                        ReaderViewRightFilter_All, 0, rv_text(0, 0));
+  rv_make_control_nonquiet(ctx, clear_id);
+  rv_set_semantic_control(ctx, clear_id,
+                          ReaderViewSemanticControl_FindClear);
+
+  if (find->status.state == ReaderViewLoad_Ready && ready_status.size == 0 &&
+      find->row_count == 0)
+  {
+    if (query.size == 0)
+      ready_status = labels.find_prompt;
+    else if (find->total_count == 0)
+      ready_status = labels.no_matches;
+  }
+  if (find->status.state == ReaderViewLoad_Ready && ready_status.size > 0)
+  {
+    UI0ID status_id = rv_id(223, 0);
+    rv_add_text_record(ctx, status_id, ctx->left_panel_id,
+                       rv_rect(body.x + 20,
+                               body.y + RV_NAV_FIND_STATUS_Y,
+                               rv_max(body.w - 40, 1),
+                               RV_NAV_FIND_STATUS_HEIGHT),
+                       ready_status,
+                       ReaderViewSemantic_Status,
+                       ReaderViewSemantic_Enabled, 0);
+    rv_add_text_override(ctx, status_id, UI0TextAlignX_Start,
+                         UI0TypographyRole_Body,
+                         ctx->input->theme->colors[UI0ColorRole_TextMuted]);
+  }
 
   if (find->status.state != ReaderViewLoad_Ready)
   {
     rv_add_status(ctx, ctx->left_panel_id, 224, list_rect, find->status);
     return;
   }
-  content_h = find->row_count * RV_ROW_HEIGHT;
+  content_h = find->row_count * RV_NAV_FIND_ROW_HEIGHT;
+  for (index = 0; index < find->row_count; ++index)
+  {
+    if (ctx->signals.focus_id == rv_id(227, find->rows[index].key))
+    {
+      UI0S32 old_scroll_y = state->find_scroll_y;
+      UI0S32 row_top = index * RV_NAV_FIND_ROW_HEIGHT;
+      UI0S32 row_bottom = row_top + RV_NAV_FIND_ROW_HEIGHT;
+      if (row_top < state->find_scroll_y)
+        state->find_scroll_y = row_top;
+      else if (row_bottom > state->find_scroll_y + list_rect.h)
+        state->find_scroll_y = rv_max(0, row_bottom - list_rect.h);
+      if (state->find_scroll_y != old_scroll_y)
+        ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
+      break;
+    }
+  }
   scroll_y = rv_scroll_region(ctx, rv_id(225, 0), list_rect, content_h,
                               &state->find_scroll_y, &state->find_scroll);
-  if (find->row_count == 0)
-  {
-    ReaderViewSurfaceStatus empty = find->status;
-    empty.state = ReaderViewLoad_Empty;
-    rv_add_status(ctx, ctx->left_panel_id, 226, list_rect, empty);
-  }
+  content_clip = rv_scroll_content_clip(ctx, list_rect);
   for (index = 0; index < find->row_count; ++index)
   {
     const ReaderViewFindRow *row = find->rows + index;
     UI0Rect row_rect = rv_rect(list_rect.x,
-                               list_rect.y + index * RV_ROW_HEIGHT - scroll_y,
-                               list_rect.w - 12,
-                               RV_ROW_HEIGHT - 2);
-    if (!rv_rect_intersects(row_rect, list_rect)) continue;
-    if (rv_add_control(ctx, rv_id(227, row->key), ctx->left_panel_id,
-                       UI0ControlKind_ListRow,
-                       ReaderViewSemantic_ListItem,
-                       UI0RootKind_Normal,
-                       row_rect,
-                       row->excerpt,
-                       row->section,
-                       row->key,
-                       (row->flags & ReaderViewRow_Enabled) != 0,
-                       index == find->active_index ||
-                       (row->flags & ReaderViewRow_Selected) != 0,
-                       0, 0, 0))
+                               list_rect.y +
+                                 index * RV_NAV_FIND_ROW_HEIGHT - scroll_y,
+                               list_rect.w,
+                               RV_NAV_FIND_ROW_HEIGHT);
+    UI0Rect hit_rect = ui0_rect_intersect(row_rect, content_clip);
+    UI0Rect section_rect = rv_rect(row_rect.x + 12, row_rect.y + 8,
+                                   rv_max(row_rect.w - 24, 1), 18);
+    UI0Rect excerpt_rect = rv_rect(row_rect.x + 12, row_rect.y + 32,
+                                   rv_max(row_rect.w - 24, 1),
+                                   rv_max(row_rect.h - 42, 1));
+    UI0ID row_id = rv_id(227, row->key);
+    UI0S32 control_index = ctx->control_count;
+    if (hit_rect.w <= 0 || hit_rect.h <= 0) continue;
+    if (rv_add_control_with_hit_rect(
+          ctx, row_id, ctx->left_panel_id,
+          UI0ControlKind_SidenavRow,
+          ReaderViewSemantic_ListItem,
+          UI0RootKind_Normal,
+          row_rect, hit_rect,
+          row->excerpt, row->section, row->key,
+          (row->flags & ReaderViewRow_Enabled) != 0,
+          index == find->active_index ||
+            (row->flags & ReaderViewRow_Selected) != 0,
+          0, 0, 0))
     {
       state->active_find_key = row->key;
       (void)rv_add_action(ctx, ReaderViewAction_ActivateFindRow,
@@ -2692,6 +4281,46 @@ rv_build_find_panel(RVBuildContext *ctx,
                           ReaderViewRightRow_Bookmark,
                           ReaderViewRightFilter_All, 0, rv_text(0, 0));
     }
+    if (ctx->control_count > control_index)
+    {
+      UI0ControlRecord *record =
+        ctx->storage->control_records + control_index;
+      record->clip_rect = hit_rect;
+      record->text_rect = rv_rect(0, 0, 0, 0);
+    }
+    rv_set_semantic_control(ctx, row_id, ReaderViewSemanticControl_FindRow);
+    if (row->section.size > 0)
+    {
+      rv_add_text_record_styled(ctx, rv_id(228, row->key), row_id,
+                                section_rect, row->section,
+                                ReaderViewTextStyle_ChromeMetadata,
+                                ReaderViewSemantic_Group,
+                                ReaderViewSemantic_Enabled, row->key);
+      rv_add_text_override(ctx, rv_id(228, row->key),
+                           UI0TextAlignX_End,
+                           UI0TypographyRole_Metadata,
+                           ctx->input->theme->colors[UI0ColorRole_TextMuted]);
+      {
+        UI0ControlRecord *section_record =
+          rv_control_record_for_id(ctx, rv_id(228, row->key));
+        if (section_record)
+          section_record->clip_rect = ui0_rect_intersect(
+            section_record->clip_rect, content_clip);
+      }
+    }
+    rv_add_text_record(ctx, rv_id(230, row->key), row_id,
+                       excerpt_rect, row->excerpt,
+                       ReaderViewSemantic_Group,
+                       ReaderViewSemantic_Enabled, row->key);
+    {
+      UI0ControlRecord *excerpt_record =
+        rv_control_record_for_id(ctx, rv_id(230, row->key));
+      if (excerpt_record)
+        excerpt_record->clip_rect = ui0_rect_intersect(
+          excerpt_record->clip_rect, content_clip);
+    }
+    rv_set_text_binding_match(ctx, rv_id(230, row->key),
+                              row->match_start, row->match_size);
   }
 }
 
@@ -2700,49 +4329,156 @@ rv_build_left_panel(RVBuildContext *ctx, ReaderViewLabels labels)
 {
   ReaderViewState *state = ctx->input->state;
   UI0Rect panel = ctx->input->layout->left_panel_rect;
-  UI0Rect tabs;
+  UI0Rect body;
   UI0Rect list_rect;
+  UI0Rect contents_tab;
+  UI0Rect find_tab;
+  UI0Rect close_rect;
+  ReaderViewText panel_name;
   if (!ctx->input->layout->left_panel_visible || panel.w <= 0) return;
+  if (state->pending_left_panel_focus == state->left_panel)
+  {
+    rv_focus_left_panel(ctx, state->left_panel);
+    state->pending_left_panel_focus = ReaderViewLeftPanel_None;
+    ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
+  }
   ctx->left_panel_id = rv_id(200, 0);
+  panel_name = state->left_panel == ReaderViewLeftPanel_Find ?
+    labels.find_panel_title : labels.contents_panel_title;
   (void)rv_add_surface(ctx, ctx->left_panel_id, 0,
                        UI0ControlKind_PanelSurface,
                        ReaderViewSemantic_Panel,
                        UI0RootKind_Normal,
-                       panel, labels.contents);
-  tabs = rv_rect(panel.x + RV_INSET, panel.y + RV_GAP,
-                 panel.w - RV_INSET * 2 - 36, RV_CONTROL_HEIGHT);
+                       panel, panel_name);
+  rv_add_visual_fill(ctx, rv_id(205, 0),
+                     rv_rect(panel.x + RV_NAV_RAIL_WIDTH - 1,
+                             panel.y + 12, 1,
+                             rv_max(panel.h - 24, 1)),
+                     panel,
+                     ctx->input->theme->colors[UI0ColorRole_BorderMuted]);
+  rv_add_visual_fill(ctx, rv_id(206, 0),
+                     rv_rect(panel.x + panel.w - 1,
+                             panel.y, 1, panel.h),
+                     panel,
+                     ctx->input->theme->colors[UI0ColorRole_BorderMuted]);
+  body = rv_rect(panel.x + RV_NAV_RAIL_WIDTH,
+                 panel.y,
+                 rv_max(panel.w - RV_NAV_RAIL_WIDTH, 1),
+                 panel.h);
+  contents_tab = rv_rect(panel.x + 8, panel.y + 12,
+                         rv_max(RV_NAV_RAIL_WIDTH - 16, 1),
+                         RV_NAV_RAIL_ROW_HEIGHT);
+  find_tab = rv_rect(contents_tab.x,
+                     contents_tab.y + RV_NAV_RAIL_ROW_STEP,
+                     contents_tab.w,
+                     contents_tab.h);
+  close_rect = rv_rect(body.x + body.w - 34, body.y + 10, 24, 24);
   if (rv_has_feature(ctx->input->projection, ReaderViewFeature_Contents) &&
       rv_add_control(ctx, rv_id(201, 0), ctx->left_panel_id,
                      UI0ControlKind_SegmentItem, ReaderViewSemantic_Tab,
                      UI0RootKind_Normal,
-                     rv_rect(tabs.x, tabs.y, tabs.w / 2, tabs.h),
+                     contents_tab,
                      labels.contents, rv_text(0, 0), 0, 1,
                      state->left_panel == ReaderViewLeftPanel_Contents,
                      state->left_panel == ReaderViewLeftPanel_Contents,
                      0, 0))
-    state->left_panel = ReaderViewLeftPanel_Contents;
+  {
+    if (state->left_panel != ReaderViewLeftPanel_Contents)
+      rv_toggle_left_panel(ctx, ReaderViewLeftPanel_Contents, 0);
+  }
+  rv_set_control_visual_text(ctx, rv_id(201, 0), labels.contents_short);
+  rv_set_semantic_control(ctx, rv_id(201, 0),
+                          ReaderViewSemanticControl_LeftContentsTab);
   if (rv_has_feature(ctx->input->projection, ReaderViewFeature_Find) &&
       rv_add_control(ctx, rv_id(202, 0), ctx->left_panel_id,
                      UI0ControlKind_SegmentItem, ReaderViewSemantic_Tab,
                      UI0RootKind_Normal,
-                     rv_rect(tabs.x + tabs.w / 2, tabs.y,
-                             tabs.w - tabs.w / 2, tabs.h),
+                     find_tab,
                      labels.find, rv_text(0, 0), 0, 1,
                      state->left_panel == ReaderViewLeftPanel_Find,
                      state->left_panel == ReaderViewLeftPanel_Find,
                      0, 0))
-    state->left_panel = ReaderViewLeftPanel_Find;
-  if (rv_add_control(ctx, rv_id(203, 0), ctx->left_panel_id,
-                     UI0ControlKind_IconButton, ReaderViewSemantic_Button,
-                     UI0RootKind_Normal,
-                     rv_rect(panel.x + panel.w - RV_INSET - 32,
-                             panel.y + RV_GAP, 32, RV_CONTROL_HEIGHT),
-                     labels.close, rv_text(0, 0), 0, 1, 0, 0, 0, 0))
-    rv_toggle_left_panel(ctx, state->left_panel);
-  list_rect = rv_rect(panel.x + RV_INSET,
-                      panel.y + (state->left_panel == ReaderViewLeftPanel_Find ? 132 : 52),
-                      panel.w - RV_INSET * 2,
-                      panel.h - (state->left_panel == ReaderViewLeftPanel_Find ? 144 : 64));
+  {
+    if (state->left_panel != ReaderViewLeftPanel_Find)
+      rv_toggle_left_panel(ctx, ReaderViewLeftPanel_Find, 0);
+  }
+  rv_set_semantic_control(ctx, rv_id(202, 0),
+                          ReaderViewSemanticControl_LeftFindTab);
+  {
+    UI0Rect rail_rows[2] = {contents_tab, find_tab};
+    ReaderViewText rail_labels[2] = {labels.contents_short, labels.find};
+    UI0ID rail_ids[2] = {rv_id(201, 0), rv_id(202, 0)};
+    UI0B32 rail_selected[2] = {
+      state->left_panel == ReaderViewLeftPanel_Contents,
+      state->left_panel == ReaderViewLeftPanel_Find,
+    };
+    UI0B32 rail_enabled[2] = {
+      rv_has_feature(ctx->input->projection, ReaderViewFeature_Contents),
+      rv_has_feature(ctx->input->projection, ReaderViewFeature_Find),
+    };
+    UI0S32 rail_index;
+    for (rail_index = 0; rail_index < 2; ++rail_index)
+    {
+      UI0Rect outer;
+      UI0Rect visual_body;
+      UI0Rect text_rect;
+      if (!rail_enabled[rail_index]) continue;
+      outer = rail_rows[rail_index];
+      visual_body = ui0_flat_row_body_rect(outer, 3, 4);
+      text_rect = rv_rect(visual_body.x + 8 + 1,
+                          visual_body.y,
+                          rv_max(visual_body.w - 8 - 1 - 8, 0),
+                          visual_body.h);
+      rv_add_sidenav_visual(
+        ctx,
+        rail_ids[rail_index],
+        rv_id(207, 0),
+        rail_index,
+        0,
+        outer,
+        visual_body,
+        panel,
+        text_rect,
+        ui0_flat_row_indicator_rect(visual_body, 3, 4),
+        rv_rect(0, 0, 0, 0),
+        rail_labels[rail_index],
+        rail_selected[rail_index],
+        rail_selected[rail_index],
+        0,
+        0);
+    }
+  }
+  if (rv_add_icon_control(ctx, rv_id(203, 0), ctx->left_panel_id,
+                          UI0ControlKind_IconButton,
+                          ReaderViewSemantic_Button,
+                          UI0RootKind_Normal,
+                          close_rect, close_rect,
+                          labels.close_navigation, rv_text(0, 0), 0,
+                          1, 0, 0, 0, 0,
+                          UI0IconKind_Close,
+                          rv_toolbar_icon_rect(close_rect), 1))
+    rv_close_left_panel(ctx);
+  rv_make_control_nonquiet(ctx, rv_id(203, 0));
+  rv_set_semantic_control(ctx, rv_id(203, 0),
+                          ReaderViewSemanticControl_LeftPanelClose);
+
+  rv_add_text_record_styled(ctx, rv_id(204, 0), ctx->left_panel_id,
+                            rv_rect(body.x + 20, body.y + 12,
+                                    rv_max(body.w - 64, 1),
+                                    RV_NAV_TITLE_HEIGHT),
+                            panel_name,
+                            ReaderViewTextStyle_ChromeTitle,
+                            ReaderViewSemantic_Group,
+                            ReaderViewSemantic_Enabled, 0);
+  list_rect = rv_rect(body.x + 20,
+                      panel.y +
+                        (state->left_panel == ReaderViewLeftPanel_Find ?
+                           RV_NAV_FIND_START_Y : RV_NAV_CONTENTS_START_Y),
+                      rv_max(body.w - 40, 1),
+                      rv_max(panel.h -
+                        (state->left_panel == ReaderViewLeftPanel_Find ?
+                           RV_NAV_FIND_START_Y : RV_NAV_CONTENTS_START_Y) -
+                        RV_NAV_BOTTOM_PAD, 0));
   if (state->left_panel == ReaderViewLeftPanel_Find)
     rv_build_find_panel(ctx, panel, list_rect, labels);
   else
@@ -2775,20 +4511,125 @@ rv_filter_label(ReaderViewLabels labels, ReaderViewRightFilter filter)
   }
 }
 
+static ReaderViewText
+rv_right_empty_label(ReaderViewLabels labels, ReaderViewRightFilter filter)
+{
+  switch (filter)
+  {
+    case ReaderViewRightFilter_Bookmarks: return labels.no_bookmarks;
+    case ReaderViewRightFilter_Highlights: return labels.no_highlights;
+    case ReaderViewRightFilter_Notes: return labels.no_notes;
+    case ReaderViewRightFilter_All:
+    default: return labels.no_annotations;
+  }
+}
+
+static ReaderViewText
+rv_filter_label_with_count(RVBuildContext *ctx,
+                           ReaderViewLabels labels,
+                           ReaderViewRightFilter filter)
+{
+  const ReaderViewRightProjection *right;
+  ReaderViewText base;
+  UI0U64 count;
+  UI0S32 slot;
+  char digits[20];
+  UI0S32 digit_count = 0;
+  UI0S32 index;
+  char *buffer;
+  if (!ctx || !ctx->input || !ctx->input->projection || !ctx->storage)
+    return rv_filter_label(labels, filter);
+  right = &ctx->input->projection->right;
+  base = rv_filter_label(labels, filter);
+  switch (filter)
+  {
+    case ReaderViewRightFilter_All:
+      slot = 0;
+      count = right->all_count;
+      break;
+    case ReaderViewRightFilter_Highlights:
+      slot = 1;
+      count = right->highlight_count;
+      break;
+    case ReaderViewRightFilter_Notes:
+      slot = 2;
+      count = right->note_count;
+      break;
+    case ReaderViewRightFilter_Bookmarks:
+      slot = 3;
+      count = right->bookmark_count;
+      break;
+    default:
+      return base;
+  }
+  do
+  {
+    digits[digit_count++] = (char)('0' + (count % 10));
+    count /= 10;
+  } while (count != 0 && digit_count < (UI0S32)sizeof(digits));
+  if (base.size < 0 ||
+      base.size > READER_VIEW_RIGHT_FILTER_LABEL_CAP - 3 - digit_count)
+  {
+    ctx->frame->error_flags |= ReaderViewFrameError_RecordCap;
+    return base;
+  }
+  buffer = ctx->storage->right_filter_labels[slot];
+  for (index = 0; index < base.size; ++index)
+    buffer[index] = base.data[index];
+  buffer[base.size] = ' ';
+  buffer[base.size + 1] = '(';
+  for (index = 0; index < digit_count; ++index)
+    buffer[base.size + 2 + index] = digits[digit_count - index - 1];
+  buffer[base.size + 2 + digit_count] = ')';
+  return rv_text(buffer, base.size + 3 + digit_count);
+}
+
+static UI0B32
+rv_right_row_starts_section(const ReaderViewRightProjection *right,
+                            UI0S32 index)
+{
+  if (!right || index < 0 || index >= right->row_count ||
+      right->rows[index].section.size == 0)
+    return 0;
+  return index == 0 ||
+         !rv_text_same(right->rows[index - 1].section,
+                       right->rows[index].section);
+}
+
+static UI0S32
+rv_right_content_height(const ReaderViewRightProjection *right)
+{
+  UI0S32 index;
+  UI0S32 result = 0;
+  if (!right) return 0;
+  for (index = 0; index < right->row_count; ++index)
+  {
+    if (rv_right_row_starts_section(right, index))
+      result += RV_RIGHT_SECTION_HEIGHT;
+    result += RV_RIGHT_ROW_HEIGHT;
+    if (index + 1 < right->row_count &&
+        (right->rows[index + 1].flags &
+         ReaderViewRow_AttachedToPrevious) == 0)
+      result += RV_RIGHT_ROW_GAP;
+  }
+  return result;
+}
+
 static void
 rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
 {
   const ReaderViewRightProjection *right = &ctx->input->projection->right;
   ReaderViewState *state = ctx->input->state;
   UI0Rect panel = ctx->input->layout->right_panel_rect;
-  UI0Rect filter_rect;
   UI0Rect list_rect;
-  UI0S32 filter_count = 0;
-  UI0S32 filter_slot = 0;
-  UI0S32 filter;
+  UI0Rect filter_rect;
+  UI0Rect export_rect;
+  UI0Rect close_rect;
   UI0S32 scroll_y;
   UI0S32 content_h;
   UI0S32 index;
+  UI0S32 row_y;
+  UI0Rect content_clip;
   if (!ctx->input->layout->right_panel_visible || panel.w <= 0) return;
   ctx->right_panel_id = rv_id(300, 0);
   (void)rv_add_surface(ctx, ctx->right_panel_id, 0,
@@ -2796,99 +4637,196 @@ rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
                        ReaderViewSemantic_Panel,
                        UI0RootKind_Normal,
                        panel, labels.annotations);
-  rv_add_text_record(ctx, rv_id(301, 0), ctx->right_panel_id,
-                     rv_rect(panel.x + RV_INSET, panel.y + RV_GAP,
-                             panel.w - 88, RV_CONTROL_HEIGHT),
-                     labels.annotations, ReaderViewSemantic_Group,
-                     ReaderViewSemantic_Enabled, 0);
+  rv_add_text_record_styled(ctx, rv_id(301, 0), ctx->right_panel_id,
+                            rv_rect(panel.x + 88, panel.y + 8,
+                                    rv_max(panel.w - 134, 1), 28),
+                            labels.annotations,
+                            ReaderViewTextStyle_ChromeTitle,
+                            ReaderViewSemantic_Group,
+                            ReaderViewSemantic_Enabled, 0);
+  filter_rect = rv_rect(panel.x + 10, panel.y + 10, 24, 24);
+  export_rect = rv_rect(panel.x + 44, panel.y + 10, 24, 24);
+  close_rect = rv_rect(panel.x + panel.w - 34, panel.y + 10, 24, 24);
+
+  if (rv_add_icon_control(ctx, rv_id(304, 0), ctx->right_panel_id,
+                          UI0ControlKind_MenuTrigger,
+                          ReaderViewSemantic_Button,
+                          UI0RootKind_Normal,
+                          filter_rect, filter_rect,
+                          labels.filter_annotations,
+                          rv_filter_label(labels, state->right_filter),
+                          (ReaderViewKey)state->right_filter,
+                          right->available_filters != 0,
+                          0, 0,
+                          state->popup == ReaderViewPopup_RightFilter,
+                          0, UI0IconKind_Filter,
+                          rv_toolbar_icon_rect(filter_rect), 1))
+  {
+    state->popup = ReaderViewPopup_RightFilter;
+    state->restore_focus_id = rv_id(304, 0);
+    state->right_filter_menu_flags = right->available_filters;
+    ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
+  }
+  rv_set_semantic_control(ctx, rv_id(304, 0),
+                          ReaderViewSemanticControl_RightFilter);
   if (rv_has_feature(ctx->input->projection, ReaderViewFeature_Export) &&
-      rv_add_control(ctx, rv_id(302, 0), ctx->right_panel_id,
-                     UI0ControlKind_TextButton, ReaderViewSemantic_Button,
-                     UI0RootKind_Normal,
-                     rv_rect(panel.x + panel.w - 78, panel.y + RV_GAP,
-                             36, RV_CONTROL_HEIGHT),
-                     labels.export_rows, rv_text(0, 0), 0,
-                     right->status.state == ReaderViewLoad_Ready &&
-                     right->row_count > 0, 0, 0, 0, 0))
+      rv_add_icon_control(ctx, rv_id(302, 0), ctx->right_panel_id,
+                          UI0ControlKind_IconButton,
+                          ReaderViewSemantic_Button,
+                          UI0RootKind_Normal,
+                          export_rect, export_rect,
+                          labels.export_annotations, rv_text(0, 0), 0,
+                          right->status.state == ReaderViewLoad_Ready &&
+                          right->row_count > 0,
+                          0, 0, 0, 0,
+                          UI0IconKind_Upload,
+                          rv_toolbar_icon_rect(export_rect), 1))
     (void)rv_add_action(ctx, ReaderViewAction_ExportRightRows, 0, 0,
                         ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                         state->right_filter, 0, rv_text(0, 0));
-  if (rv_add_control(ctx, rv_id(303, 0), ctx->right_panel_id,
-                     UI0ControlKind_IconButton, ReaderViewSemantic_Button,
-                     UI0RootKind_Normal,
-                     rv_rect(panel.x + panel.w - 38, panel.y + RV_GAP,
-                             30, RV_CONTROL_HEIGHT),
-                     labels.close, rv_text(0, 0), 0, 1, 0, 0, 0, 0))
-    rv_toggle_right_panel(ctx);
+  rv_set_semantic_control(ctx, rv_id(302, 0),
+                          ReaderViewSemanticControl_RightExport);
+  rv_make_control_nonquiet(ctx, rv_id(302, 0));
+  if (rv_add_icon_control(ctx, rv_id(303, 0), ctx->right_panel_id,
+                          UI0ControlKind_IconButton,
+                          ReaderViewSemantic_Button,
+                          UI0RootKind_Normal,
+                          close_rect, close_rect,
+                          labels.close_annotations, rv_text(0, 0), 0,
+                          1, 0, 0, 0, 0,
+                          UI0IconKind_Close,
+                          rv_toolbar_icon_rect(close_rect), 1))
+    rv_close_right_panel(ctx);
+  rv_make_control_nonquiet(ctx, rv_id(303, 0));
+  rv_set_semantic_control(ctx, rv_id(303, 0),
+                          ReaderViewSemanticControl_RightPanelClose);
 
-  for (filter = ReaderViewRightFilter_All;
-       filter <= ReaderViewRightFilter_Notes; ++filter)
-    if ((right->available_filters &
-         rv_filter_flag((ReaderViewRightFilter)filter)) != 0)
-      filter_count += 1;
-  if (filter_count == 0) filter_count = 1;
-  filter_rect = rv_rect(panel.x + RV_INSET, panel.y + 48,
-                        panel.w - RV_INSET * 2, RV_CONTROL_HEIGHT);
-  for (filter = ReaderViewRightFilter_All;
-       filter <= ReaderViewRightFilter_Notes; ++filter)
-  {
-    ReaderViewRightFilter value = (ReaderViewRightFilter)filter;
-    if ((right->available_filters & rv_filter_flag(value)) == 0) continue;
-    if (rv_add_control(ctx, rv_id(310 + (UI0U64)filter, 0),
-                       ctx->right_panel_id,
-                       UI0ControlKind_SegmentItem,
-                       ReaderViewSemantic_Tab,
-                       UI0RootKind_Normal,
-                       rv_toolbar_slot(filter_rect, filter_slot++, filter_count),
-                       rv_filter_label(labels, value), rv_text(0, 0), 0, 1,
-                       state->right_filter == value,
-                       state->right_filter == value, 0, 0))
-    {
-      state->right_filter = value;
-      (void)rv_add_action(ctx, ReaderViewAction_RightFilterChanged,
-                          0, 0, ReaderViewSetting_FontFamily,
-                          ReaderViewRightRow_Bookmark, value, 0,
-                          rv_text(0, 0));
-      ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
-    }
-  }
-  list_rect = rv_rect(panel.x + RV_INSET, panel.y + 88,
-                      panel.w - RV_INSET * 2, panel.h - 100);
+  list_rect = rv_rect(panel.x + 10,
+                      panel.y + RV_RIGHT_LIST_START_Y,
+                      rv_max(panel.w - 20, 1),
+                      rv_max(panel.h - RV_RIGHT_LIST_START_Y - 10, 0));
   if (right->status.state != ReaderViewLoad_Ready)
   {
     rv_add_status(ctx, ctx->right_panel_id, 320, list_rect, right->status);
     return;
   }
-  content_h = right->row_count * RV_ROW_HEIGHT;
-  scroll_y = rv_scroll_region(ctx, rv_id(322, 0), list_rect, content_h,
-                              &state->right_scroll_y, &state->right_scroll);
   if (right->row_count == 0)
   {
-    ReaderViewSurfaceStatus empty = right->status;
-    empty.state = ReaderViewLoad_Empty;
-    rv_add_status(ctx, ctx->right_panel_id, 323, list_rect, empty);
+    UI0ID empty_id = rv_id(323, 0);
+    rv_add_text_record(
+      ctx, empty_id, ctx->right_panel_id,
+      rv_rect(panel.x + 10, panel.y + 88, rv_max(panel.w - 20, 1), 24),
+      rv_right_empty_label(labels, state->right_filter),
+      ReaderViewSemantic_Status, ReaderViewSemantic_Enabled, 0);
+    rv_add_text_override(ctx, empty_id, UI0TextAlignX_Start,
+                         UI0TypographyRole_Body,
+                         ctx->input->theme->colors[UI0ColorRole_TextMuted]);
+    return;
   }
+  content_h = rv_right_content_height(right);
+  row_y = 0;
+  for (index = 0; index < right->row_count; ++index)
+  {
+    UI0S32 entry_top;
+    UI0S32 entry_bottom;
+    if (rv_right_row_starts_section(right, index))
+      row_y += RV_RIGHT_SECTION_HEIGHT;
+    entry_top = row_y;
+    entry_bottom = entry_top + RV_RIGHT_ROW_HEIGHT;
+    if (ctx->signals.focus_id == rv_id(324, right->rows[index].key) ||
+        ctx->signals.focus_id == rv_id(325, right->rows[index].key) ||
+        ctx->signals.focus_id == rv_id(326, right->rows[index].key))
+    {
+      UI0S32 old_scroll_y = state->right_scroll_y;
+      if (entry_top < state->right_scroll_y)
+        state->right_scroll_y = entry_top;
+      else if (entry_bottom > state->right_scroll_y + list_rect.h)
+        state->right_scroll_y = rv_max(0, entry_bottom - list_rect.h);
+      if (state->right_scroll_y != old_scroll_y)
+        ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
+      break;
+    }
+    row_y += RV_RIGHT_ROW_HEIGHT;
+    if (index + 1 < right->row_count &&
+        (right->rows[index + 1].flags &
+         ReaderViewRow_AttachedToPrevious) == 0)
+      row_y += RV_RIGHT_ROW_GAP;
+  }
+  scroll_y = rv_scroll_region(ctx, rv_id(322, 0), list_rect, content_h,
+                              &state->right_scroll_y, &state->right_scroll);
+  content_clip = rv_scroll_content_clip(ctx, list_rect);
+  row_y = list_rect.y - scroll_y;
   for (index = 0; index < right->row_count; ++index)
   {
     const ReaderViewRightRow *row = right->rows + index;
-    UI0Rect row_rect = rv_rect(list_rect.x,
-                               list_rect.y + index * RV_ROW_HEIGHT - scroll_y,
-                               list_rect.w - 12,
-                               RV_ROW_HEIGHT - 2);
-    UI0Rect main_rect = rv_rect(row_rect.x, row_rect.y,
-                                row_rect.w - 64, row_rect.h);
-    if (!rv_rect_intersects(row_rect, list_rect)) continue;
-    if (rv_add_control(ctx, rv_id(324, row->key), ctx->right_panel_id,
-                       UI0ControlKind_ListRow,
-                       ReaderViewSemantic_ListItem,
-                       UI0RootKind_Normal,
-                       main_rect,
-                       row->primary,
-                       row->section,
-                       row->key,
-                       (row->flags & ReaderViewRow_Enabled) != 0,
-                       (row->flags & ReaderViewRow_Selected) != 0,
-                       0, 0, 0))
+    UI0Rect entry_rect;
+    UI0Rect visual_row;
+    UI0Rect star_rect;
+    UI0Rect menu_rect;
+    UI0Rect star_hit;
+    UI0Rect menu_hit;
+    UI0Rect main_hit;
+    UI0Rect visible_rect;
+    UI0ID row_id = rv_id(324, row->key);
+    UI0S32 control_index;
+    if (rv_right_row_starts_section(right, index))
+    {
+      UI0Rect section_rect = rv_rect(list_rect.x, row_y,
+                                     list_rect.w,
+                                     RV_RIGHT_SECTION_LABEL_HEIGHT);
+      if (rv_rect_intersects(section_rect, list_rect))
+      {
+        rv_add_text_record_styled(ctx, rv_id(321, row->key),
+                                  ctx->right_panel_id,
+                                  section_rect, row->section,
+                                  ReaderViewTextStyle_ChromeTitle,
+                                  ReaderViewSemantic_Group,
+                                  ReaderViewSemantic_Enabled, row->key);
+        {
+          UI0ControlRecord *section_record =
+            rv_control_record_for_id(ctx, rv_id(321, row->key));
+          if (section_record)
+            section_record->clip_rect = ui0_rect_intersect(
+              section_record->clip_rect, content_clip);
+        }
+      }
+      row_y += RV_RIGHT_SECTION_HEIGHT;
+    }
+    entry_rect = rv_rect(list_rect.x, row_y,
+                         list_rect.w, RV_RIGHT_ROW_HEIGHT);
+    visual_row = rv_rect(entry_rect.x + 5, entry_rect.y,
+                         rv_max(entry_rect.w - 5, 1), entry_rect.h);
+    star_rect = rv_rect(entry_rect.x + entry_rect.w - 58,
+                        entry_rect.y + (entry_rect.h - 20) / 2,
+                        20, 20);
+    menu_rect = rv_rect(entry_rect.x + entry_rect.w - 38,
+                        entry_rect.y + (entry_rect.h - 28) / 2,
+                        30, 28);
+    star_hit = ui0_rect_intersect(star_rect, content_clip);
+    menu_hit = ui0_rect_intersect(menu_rect, content_clip);
+    main_hit = ui0_rect_intersect(
+      rv_rect(visual_row.x, visual_row.y,
+              rv_max(star_rect.x - visual_row.x, 1), visual_row.h),
+      content_clip);
+    visible_rect = ui0_rect_intersect(entry_rect, content_clip);
+    row_y += RV_RIGHT_ROW_HEIGHT;
+    if (index + 1 < right->row_count &&
+        (right->rows[index + 1].flags &
+         ReaderViewRow_AttachedToPrevious) == 0)
+      row_y += RV_RIGHT_ROW_GAP;
+    if (visible_rect.w <= 0 || visible_rect.h <= 0) continue;
+    control_index = ctx->control_count;
+    if (rv_add_control_with_hit_rect(
+          ctx, row_id, ctx->right_panel_id,
+          UI0ControlKind_SidenavRow,
+          ReaderViewSemantic_ListItem,
+          UI0RootKind_Normal,
+          visual_row, main_hit,
+          row->primary, row->secondary, row->key,
+          (row->flags & ReaderViewRow_Enabled) != 0,
+          (row->flags & ReaderViewRow_Selected) != 0 ||
+            state->active_right_key == row->key,
+          0, 0, 0))
     {
       state->active_right_key = row->key;
       if ((row->actions & ReaderViewRightAction_Activate) != 0)
@@ -2896,45 +4834,136 @@ rv_build_right_panel(RVBuildContext *ctx, ReaderViewLabels labels)
                             row->key, 0, ReaderViewSetting_FontFamily, row->kind,
                             state->right_filter, 0, rv_text(0, 0));
     }
-    if ((row->actions & ReaderViewRightAction_ToggleStar) != 0 &&
-        rv_add_control(ctx, rv_id(325, row->key), ctx->right_panel_id,
-                       UI0ControlKind_IconButton,
-                       ReaderViewSemantic_ToggleButton,
-                       UI0RootKind_Normal,
-                       rv_rect(row_rect.x + row_rect.w - 62, row_rect.y,
-                               30, row_rect.h),
-                       (row->flags & ReaderViewRow_Starred) ?
-                         labels.unstar : labels.star,
-                       rv_text(0, 0), row->key, 1, 0,
-                       (row->flags & ReaderViewRow_Starred) != 0, 0, 0))
+    if (ctx->control_count > control_index)
+    {
+      UI0ControlRecord *record =
+        ctx->storage->control_records + control_index;
+      record->clip_rect = visible_rect;
+      record->text_rect = rv_rect(0, 0, 0, 0);
+    }
+    rv_set_semantic_rect(ctx, row_id, entry_rect);
+    rv_set_semantic_control(ctx, row_id,
+                            ReaderViewSemanticControl_RightRow);
+    if ((row->flags & ReaderViewRow_Current) != 0)
+      rv_add_semantic_flags_for_id(ctx, row_id, ReaderViewSemantic_Current);
+    if (row->rail_color != 0)
+      rv_add_visual_fill(ctx, rv_id(327, row->key),
+                         rv_rect(entry_rect.x,
+                                 entry_rect.y +
+                                   ((row->flags &
+                                     ReaderViewRow_AttachedToPrevious) != 0 ?
+                                      0 : 2),
+                                 4, rv_max(entry_rect.h - 2, 1)),
+                         visible_rect,
+                         row->rail_color);
+    if (row->secondary.size > 0)
+    {
+      rv_add_text_record_styled(
+        ctx, rv_id(328, row->key), row_id,
+        rv_rect(visual_row.x + 8, visual_row.y + 10,
+                rv_max(star_rect.x - visual_row.x - 16, 1), 16),
+        row->secondary, ReaderViewTextStyle_ChromeMetadata,
+        ReaderViewSemantic_Group, ReaderViewSemantic_Enabled, row->key);
+      rv_add_text_override(ctx, rv_id(328, row->key),
+                           UI0TextAlignX_Start,
+                           UI0TypographyRole_Metadata,
+                           ctx->input->theme->colors[
+                             UI0ColorRole_TextSecondary]);
+      {
+        UI0ControlRecord *secondary_record =
+          rv_control_record_for_id(ctx, rv_id(328, row->key));
+        if (secondary_record)
+          secondary_record->clip_rect = ui0_rect_intersect(
+            secondary_record->clip_rect, visible_rect);
+      }
+    }
+    rv_add_text_record(
+      ctx, rv_id(329, row->key), row_id,
+      rv_rect(visual_row.x + 8,
+              visual_row.y + (row->secondary.size > 0 ? 32 : 18),
+              rv_max(star_rect.x - visual_row.x - 16, 1), 16),
+      row->primary, ReaderViewSemantic_Group,
+      ReaderViewSemantic_Enabled, row->key);
+    {
+      UI0ControlRecord *primary_record =
+        rv_control_record_for_id(ctx, rv_id(329, row->key));
+      if (primary_record)
+        primary_record->clip_rect = ui0_rect_intersect(
+          primary_record->clip_rect, visible_rect);
+    }
+    if (star_hit.w > 0 && star_hit.h > 0 &&
+        (row->actions & ReaderViewRightAction_ToggleStar) != 0 &&
+        rv_add_icon_control(ctx, rv_id(325, row->key),
+                            ctx->right_panel_id,
+                            UI0ControlKind_IconButton,
+                            ReaderViewSemantic_ToggleButton,
+                            UI0RootKind_Normal,
+                            star_rect, star_hit,
+                            (row->flags & ReaderViewRow_Starred) ?
+                              labels.unstar : labels.star,
+                            rv_text(0, 0), row->key, 1, 0,
+                            (row->flags & ReaderViewRow_Starred) != 0,
+                            0, 0, UI0IconKind_Star,
+                            rv_rect(star_rect.x + 3, star_rect.y + 3,
+                                    rv_max(star_rect.w - 6, 1),
+                                    rv_max(star_rect.h - 6, 1)), 1))
       (void)rv_add_action(ctx, ReaderViewAction_ToggleRightRowStar,
                           row->key, 0, ReaderViewSetting_FontFamily, row->kind,
                           state->right_filter, 0, rv_text(0, 0));
-    if (rv_add_control(ctx, rv_id(326, row->key), ctx->right_panel_id,
-                       UI0ControlKind_MenuTrigger,
-                       ReaderViewSemantic_Button,
-                       UI0RootKind_Normal,
-                       rv_rect(row_rect.x + row_rect.w - 30, row_rect.y,
-                               30, row_rect.h),
-                       labels.more, rv_text(0, 0), row->key,
-                       row->actions != ReaderViewRightAction_None, 0, 0,
-                       state->popup == ReaderViewPopup_RightRowActions &&
-                       state->right_menu_key == row->key, 0))
+    {
+      UI0ControlRecord *star_control =
+        rv_control_record_for_id(ctx, rv_id(325, row->key));
+      if (star_control)
+        star_control->clip_rect = ui0_rect_intersect(
+          star_control->clip_rect, visible_rect);
+    }
+    rv_set_semantic_control(ctx, rv_id(325, row->key),
+                            ReaderViewSemanticControl_RightRowStar);
+    if (menu_hit.w > 0 && menu_hit.h > 0 &&
+        rv_add_control_with_hit_rect(
+          ctx, rv_id(326, row->key), ctx->right_panel_id,
+          UI0ControlKind_MenuTrigger, ReaderViewSemantic_Button,
+          UI0RootKind_Normal,
+          menu_rect, menu_hit,
+          labels.annotation_actions, rv_text(0, 0), row->key,
+          rv_right_action_popup_count(row) > 0,
+          0, 0,
+          state->popup == ReaderViewPopup_RightRowActions &&
+          state->right_menu_key == row->key,
+          0))
     {
       state->right_menu_key = row->key;
       state->right_menu_kind = row->kind;
+      state->right_menu_actions = row->actions;
       state->popup = ReaderViewPopup_RightRowActions;
       state->restore_focus_id = rv_id(326, row->key);
       ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
     }
+    {
+      UI0ControlRecord *menu_control =
+        rv_control_record_for_id(ctx, rv_id(326, row->key));
+      if (menu_control)
+      {
+        menu_control->clip_rect = ui0_rect_intersect(
+          menu_control->clip_rect, visible_rect);
+        menu_control->text_rect = rv_rect(menu_rect.x + 4,
+                                          menu_rect.y,
+                                          rv_max(menu_rect.w - 8, 1),
+                                          menu_rect.h);
+      }
+    }
+    rv_set_control_visual_text(ctx, rv_id(326, row->key),
+                               rv_literal("..."));
+    rv_set_semantic_control(ctx, rv_id(326, row->key),
+                            ReaderViewSemanticControl_RightRowMenu);
   }
 }
 
 static UI0Rect
 rv_gutter_icon_rect(UI0Rect visual_rect)
 {
-  UI0S32 width = rv_min(8, visual_rect.w);
-  UI0S32 height = rv_min(14, visual_rect.h);
+  UI0S32 width = rv_min(RV_GUTTER_CARET_WIDTH, visual_rect.w);
+  UI0S32 height = rv_min(RV_GUTTER_CARET_HEIGHT, visual_rect.h);
   return rv_rect(visual_rect.x + (visual_rect.w - width) / 2,
                  visual_rect.y + (visual_rect.h - height) / 2,
                  width,
@@ -2982,12 +5011,34 @@ rv_gutter_icon_control(RVBuildContext *ctx,
                                 0);
   if (ctx->control_count > control_index && ctx->icon_count > icon_index)
   {
-    UI0ControlStateFlags state =
-      ctx->storage->control_records[control_index].state;
-    ctx->icons[icon_index].visible = enabled &&
-      (state & (UI0ControlState_Hovered |
-                UI0ControlState_Pressed |
-                UI0ControlState_FocusVisible)) != 0;
+    UI0ControlRecord *record =
+      ctx->storage->control_records + control_index;
+    UI0ID id = rv_id(tag, 0);
+    UI0B32 pointer_over =
+      (record->signal_flags & UI0Signal_BlockedByRoot) == 0 &&
+      ctx->input->input->ui.pointer_x >= hot_rect.x &&
+      ctx->input->input->ui.pointer_y >= hot_rect.y &&
+      ctx->input->input->ui.pointer_x < hot_rect.x + hot_rect.w &&
+      ctx->input->input->ui.pointer_y < hot_rect.y + hot_rect.h;
+    if (pointer_over &&
+        (ctx->input->input->ui.flags & UI0Input_PointerPressed) != 0)
+    {
+      rv_move_focus(ctx, id, 0);
+    }
+    if ((record->signal_flags & UI0Signal_BlockedByRoot) == 0 &&
+        ctx->signals.focus_id == id)
+    {
+      record->state |= UI0ControlState_Focused;
+      rv_add_semantic_flags_for_id(ctx, id, ReaderViewSemantic_Focused);
+      if (ctx->signals.focus_visible_id == id)
+        record->state |= UI0ControlState_FocusVisible;
+    }
+    ctx->icons[icon_index].visible =
+      pointer_over ||
+      (record->state & (UI0ControlState_Hovered |
+                        UI0ControlState_Pressed |
+                        UI0ControlState_Focused |
+                        UI0ControlState_FocusVisible)) != 0;
   }
   if (ctx->control_count > control_index)
   {
@@ -3009,7 +5060,7 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
         labels.previous_page,
         rv_has_document_flag(projection,
           ReaderViewDocument_CanGoPreviousPage),
-        UI0IconKind_ChevronLeft))
+        UI0IconKind_PageCaretLeft))
     (void)rv_add_action(ctx, ReaderViewAction_PreviousPage, 0, 0,
                         ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                         ReaderViewRightFilter_All, 0, rv_text(0, 0));
@@ -3021,7 +5072,7 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
         labels.next_page,
         rv_has_document_flag(projection,
           ReaderViewDocument_CanGoNextPage),
-        UI0IconKind_ChevronRight))
+        UI0IconKind_PageCaretRight))
     (void)rv_add_action(ctx, ReaderViewAction_NextPage, 0, 0,
                         ReaderViewSetting_FontFamily, ReaderViewRightRow_Bookmark,
                         ReaderViewRightFilter_All, 0, rv_text(0, 0));
@@ -3057,40 +5108,41 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
     if (ctx->input->state->pending_accessibility_focus_id == spec.id)
     {
       ctx->input->state->pending_accessibility_focus_id = 0;
-      if (projection->progress.can_seek)
-      {
-        ctx->signals.focus_id = spec.id;
-        ctx->signals.focus_visible_id = spec.id;
-        ctx->frame->change_flags |= ReaderViewFrameChange_FocusChanged;
-      }
+      if (projection->progress.can_seek &&
+          ctx->input->state->popup == ReaderViewPopup_None)
+        rv_move_focus(ctx, spec.id, 1);
     }
     if (ctx->input->state->pending_accessibility_invoke_id == spec.id)
     {
       ctx->input->state->pending_accessibility_invoke_id = 0;
-      if (projection->progress.can_seek)
-      {
-        ctx->signals.focus_id = spec.id;
-        ctx->signals.focus_visible_id = spec.id;
-        ctx->frame->change_flags |= ReaderViewFrameChange_FocusChanged;
-      }
+      if (projection->progress.can_seek &&
+          ctx->input->state->popup == ReaderViewPopup_None)
+        rv_move_focus(ctx, spec.id, 1);
     }
     spec.keyboard_delta = ctx->signals.focus_id == spec.id ?
       ctx->input->input->move_horizontal_delta : 0;
     if (!projection->progress.can_seek) spec.flags |= UI0Slider_Disabled;
     result = ui0_slider_rect(&ctx->sliders, &ctx->signals, spec);
+    {
+      UI0B32 blocked =
+        (result.signal.flags & UI0Signal_BlockedByRoot) != 0;
     ctx->progress_thumb_visible = projection->progress.can_seek &&
+      !blocked &&
       (result.state & (UI0SliderState_Hovered |
                        UI0SliderState_Pressed |
                        UI0SliderState_Active |
                        UI0SliderState_Dragged)) != 0;
     (void)rv_add_semantic(ctx, spec.id, 0, ReaderViewSemantic_Slider,
                           rv_semantic_flags(ctx, spec.id,
-                                            projection->progress.can_seek, 1,
+                                            projection->progress.can_seek &&
+                                              !blocked,
+                                            !blocked,
                                             0, 0, 0),
                           slider_rect, projection->progress.label,
                           projection->progress.chapter, 0,
                           projection->progress.location_index, 0,
                           projection->progress.location_count - 1);
+    }
     rv_set_semantic_control(ctx, spec.id, ReaderViewSemanticControl_Progress);
     if (result.changed)
     {
@@ -3113,6 +5165,66 @@ rv_build_paging_and_progress(RVBuildContext *ctx, ReaderViewLabels labels)
   }
 }
 
+static UI0B32
+rv_source_is_find_row(const RVBuildContext *ctx, UI0ID id)
+{
+  const ReaderViewFindProjection *find;
+  UI0S32 index;
+  if (!ctx || !ctx->input || !ctx->input->projection) return 0;
+  find = &ctx->input->projection->find;
+  for (index = 0; index < find->row_count; ++index)
+  {
+    if (rv_id(227, find->rows[index].key) == id) return 1;
+  }
+  return 0;
+}
+
+static const ReaderViewRightRow *
+rv_right_row_for_draw_source(const RVBuildContext *ctx,
+                             UI0ID id,
+                             UI0U64 tag)
+{
+  const ReaderViewRightProjection *right;
+  UI0S32 index;
+  if (!ctx || !ctx->input || !ctx->input->projection) return 0;
+  right = &ctx->input->projection->right;
+  for (index = 0; index < right->row_count; ++index)
+  {
+    if (rv_id(tag, right->rows[index].key) == id)
+      return right->rows + index;
+  }
+  return 0;
+}
+
+static UI0B32
+rv_point_in_rect(UI0S32 x, UI0S32 y, UI0Rect rect)
+{
+  return rect.w > 0 && rect.h > 0 &&
+         x >= rect.x && y >= rect.y &&
+         x < rect.x + rect.w && y < rect.y + rect.h;
+}
+
+static UI0B32
+rv_gutter_pointer_down(const RVBuildContext *ctx, UI0ID id)
+{
+  UI0Rect hot_rect;
+  const ReaderViewLayout *layout;
+  if (!ctx || !ctx->input || !ctx->input->layout ||
+      !ctx->input->input ||
+      (ctx->input->input->ui.flags & UI0Input_PointerDown) == 0)
+    return 0;
+  layout = ctx->input->layout;
+  if (id == rv_id(400, 0))
+    hot_rect = layout->previous_gutter_rect;
+  else if (id == rv_id(401, 0))
+    hot_rect = layout->next_gutter_rect;
+  else
+    return 0;
+  return rv_point_in_rect(ctx->input->input->ui.pointer_x,
+                          ctx->input->input->ui.pointer_y,
+                          hot_rect);
+}
+
 static void
 rv_filter_reference_chrome_draws(RVBuildContext *ctx)
 {
@@ -3121,11 +5233,37 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
   UI0ID next_id = rv_id(401, 0);
   UI0ID progress_id = rv_id(402, 0);
   UI0ID progress_label_id = rv_id(403, 0);
+  UI0ID contents_tab_id = rv_id(201, 0);
+  UI0ID find_tab_id = rv_id(202, 0);
+  UI0ID left_title_id = rv_id(204, 0);
+  UI0ID right_title_id = rv_id(301, 0);
+  UI0ID find_input_id = rv_id(220, 0);
   for (UI0S32 read_index = 0;
        read_index < ctx->draw.command_count;
        ++read_index)
   {
     UI0DrawCommand command = ctx->draw.commands[read_index];
+    UI0S32 visual_index;
+    UI0S32 text_override_index;
+    UI0B32 visual_fill = 0;
+    UI0Color visual_color = 0;
+    const ReaderViewRightRow *right_row =
+      rv_right_row_for_draw_source(ctx, command.source_id, 324);
+    const ReaderViewRightRow *star_row =
+      rv_right_row_for_draw_source(ctx, command.source_id, 325);
+    const ReaderViewRightRow *menu_row =
+      rv_right_row_for_draw_source(ctx, command.source_id, 326);
+    for (visual_index = 0;
+         visual_index < ctx->visual_fill_count;
+         ++visual_index)
+    {
+      if (ctx->visual_fills[visual_index].source_id == command.source_id)
+      {
+        visual_fill = 1;
+        visual_color = ctx->visual_fills[visual_index].color;
+        break;
+      }
+    }
     UI0B32 gutter_shell =
       (command.source_id == previous_id || command.source_id == next_id) &&
       (command.op == UI0DrawOp_ControlFill ||
@@ -3135,11 +5273,119 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
       !ctx->progress_thumb_visible &&
       (command.op == UI0DrawOp_SliderThumb ||
        command.op == UI0DrawOp_FocusRing);
-    if (gutter_shell || hidden_progress_thumb) continue;
+    UI0B32 left_panel_shell = command.source_id == ctx->left_panel_id &&
+      (command.op == UI0DrawOp_ControlFill ||
+       command.op == UI0DrawOp_ControlBorder);
+    UI0B32 star_shell = star_row &&
+      (command.op == UI0DrawOp_ControlFill ||
+       command.op == UI0DrawOp_ControlBorder);
+    UI0B32 menu_shell = menu_row &&
+      (command.op == UI0DrawOp_ControlFill ||
+       command.op == UI0DrawOp_ControlBorder);
+    UI0B32 selected_right_fill = right_row &&
+      command.op == UI0DrawOp_ControlFill &&
+      (command.flags & UI0DrawFlag_Selected) != 0 &&
+      (command.flags & (UI0DrawFlag_Hovered | UI0DrawFlag_Active)) == 0;
+    UI0B32 manual_find_input = command.source_id == find_input_id;
+    if (manual_find_input ||
+        gutter_shell || hidden_progress_thumb || left_panel_shell ||
+        star_shell || menu_shell || selected_right_fill ||
+        rv_has_sidenav_visual(ctx, command.source_id) ||
+        (visual_fill && command.op != UI0DrawOp_ControlFill) ||
+        ((command.source_id == contents_tab_id ||
+          command.source_id == find_tab_id) &&
+         command.op == UI0DrawOp_SegmentJoin))
+      continue;
+    if (visual_fill && command.op == UI0DrawOp_ControlFill)
+    {
+      command.color = visual_color;
+      command.stroke_color = visual_color;
+      command.flags |= UI0DrawFlag_RadiusExplicit;
+      command.corner_radius = 0;
+    }
+    if (rv_source_is_find_row(ctx, command.source_id) &&
+        command.op == UI0DrawOp_ControlFill)
+    {
+      command.rect.y += 4;
+      command.rect.h = rv_max(command.rect.h - 8, 1);
+      command.clip_rect = ui0_rect_intersect(command.clip_rect,
+                                              command.rect);
+    }
+    if (star_row && command.op == UI0DrawOp_Icon)
+    {
+      command.color =
+        (command.flags & UI0DrawFlag_Active) != 0 ?
+          ctx->input->theme->colors[UI0ColorRole_TextPrimary] :
+        (star_row->flags & ReaderViewRow_Starred) != 0 ?
+          ctx->input->theme->colors[UI0ColorRole_Focus] :
+          ctx->input->theme->colors[UI0ColorRole_TextMuted];
+      command.stroke_color =
+        ctx->input->theme->colors[UI0ColorRole_Surface];
+    }
+    if ((command.source_id == previous_id ||
+         command.source_id == next_id) &&
+        command.op == UI0DrawOp_Icon)
+    {
+      command.color = rv_gutter_pointer_down(ctx, command.source_id) ?
+        ctx->input->theme->colors[UI0ColorRole_TextSecondary] :
+        ctx->input->theme->colors[UI0ColorRole_TextMuted];
+      command.stroke_color =
+        ctx->input->theme->colors[UI0ColorRole_Surface];
+      command.clip_rect = ctx->input->layout->bounds;
+    }
+    if ((command.source_id == previous_id ||
+         command.source_id == next_id) &&
+        command.op == UI0DrawOp_FocusRing)
+    {
+      UI0Rect visual = command.source_id == previous_id ?
+        ctx->input->layout->previous_gutter_visual_rect :
+        ctx->input->layout->next_gutter_visual_rect;
+      command.rect = rv_rect(visual.x - 2, visual.y - 2,
+                             visual.w + 4, visual.h + 4);
+      command.clip_rect = ctx->input->layout->bounds;
+      command.stroke_width = rv_max(command.stroke_width, 1);
+      command.flags |= UI0DrawFlag_RadiusExplicit;
+      command.corner_radius = 4;
+    }
     if (command.source_id == progress_label_id &&
         command.op == UI0DrawOp_Text)
     {
       command.color = ctx->input->theme->colors[UI0ColorRole_TextMuted];
+    }
+    if ((command.source_id == left_title_id ||
+         command.source_id == right_title_id) &&
+        command.op == UI0DrawOp_Text)
+    {
+      UI0TypographyToken typography =
+        ctx->input->theme->typography[UI0TypographyRole_SectionTitle];
+      command.typography_role = UI0TypographyRole_SectionTitle;
+      command.has_typography_role = 1;
+      command.typography_char_width = typography.char_width;
+      command.typography_line_height = typography.line_height;
+    }
+    if (command.op == UI0DrawOp_Text)
+    {
+      for (text_override_index = 0;
+           text_override_index < ctx->text_override_count;
+           ++text_override_index)
+      {
+        const RVTextOverrideRecord *override =
+          ctx->text_overrides + text_override_index;
+        if (override->source_id == command.source_id)
+        {
+          UI0TypographyToken typography =
+            ctx->input->theme->typography[override->typography_role];
+          command.text_align_x = override->align_x;
+          command.text_align_y = UI0TextAlignY_Center;
+          command.has_text_alignment = 1;
+          command.typography_role = override->typography_role;
+          command.has_typography_role = 1;
+          command.typography_char_width = typography.char_width;
+          command.typography_line_height = typography.line_height;
+          command.color = override->color;
+          break;
+        }
+      }
     }
     ctx->draw.commands[write_index++] = command;
   }
@@ -3158,6 +5404,7 @@ rv_build_note_editor(RVBuildContext *ctx,
   UI0Rect editor_rect;
   UI0Rect button_row;
   UI0B32 edited;
+  UI0ID editor_id = rv_id(502, state->note_selection_key);
   ctx->modal_id = rv_id(500, state->note_selection_key);
   (void)rv_add_surface(ctx, ctx->modal_id, 0,
                        UI0ControlKind_ModalSurface,
@@ -3175,9 +5422,9 @@ rv_build_note_editor(RVBuildContext *ctx,
   buffer.data = state->note_draft;
   buffer.length = &state->note_draft_length;
   buffer.cap = READER_VIEW_NOTE_DRAFT_CAP;
-  edited = rv_apply_text_area(&buffer, &state->note_input,
-                              &ctx->input->input->note_text,
-                              ctx->input->input->move_vertical_delta);
+  edited = ctx->signals.focus_id == editor_id ?
+    rv_apply_text_area(&buffer, &state->note_input,
+                       &ctx->input->input->note_text) : 0;
   if (edited)
   {
     state->note_dirty = 1;
@@ -3186,7 +5433,7 @@ rv_build_note_editor(RVBuildContext *ctx,
   if (state->note_selection_key != selection->selection_key ||
       state->note_source_revision != selection->revision)
     ctx->frame->error_flags |= ReaderViewFrameError_StaleNoteRevision;
-  (void)rv_add_control(ctx, rv_id(502, state->note_selection_key),
+  (void)rv_add_control(ctx, editor_id,
                        ctx->modal_id, UI0ControlKind_TextArea,
                        ReaderViewSemantic_TextArea, UI0RootKind_Modal,
                        editor_rect, reader_view_note_draft(state),
@@ -3228,11 +5475,13 @@ rv_build_note_editor(RVBuildContext *ctx,
                      labels.cancel, rv_text(0, 0),
                      state->note_selection_key, 1, 0, 0, 0, 0))
   {
-    state->popup = ReaderViewPopup_None;
+    (void)rv_add_action(ctx, ReaderViewAction_CancelNote,
+                        state->note_selection_key, 0,
+                        ReaderViewSetting_FontFamily, ReaderViewRightRow_Note,
+                        ReaderViewRightFilter_All,
+                        state->note_source_revision, rv_text(0, 0));
     state->note_dirty = 0;
-    state->focus_id = state->restore_focus_id;
-    state->restore_focus_id = 0;
-    ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
+    rv_close_popup_and_restore_focus(ctx);
   }
   if (rv_add_control(ctx, rv_id(505, state->note_selection_key),
                      ctx->modal_id, UI0ControlKind_TextButton,
@@ -3243,6 +5492,8 @@ rv_build_note_editor(RVBuildContext *ctx,
                              button_row.h),
                      labels.delete_value, rv_text(0, 0),
                      state->note_selection_key,
+                     state->note_selection_key == selection->selection_key &&
+                     state->note_source_revision == selection->revision &&
                      (selection->flags & ReaderViewSelection_CanDeleteNote) != 0,
                      0, 0, 0, 1))
     (void)rv_add_action(ctx, ReaderViewAction_DeleteNote,
@@ -3302,11 +5553,7 @@ rv_apply_semantic_focus_navigation(RVBuildContext *ctx)
     }
   }
   if (target < 0 || target == current) return;
-  nodes[current].flags &= ~ReaderViewSemantic_Focused;
-  nodes[target].flags |= ReaderViewSemantic_Focused;
-  ctx->signals.focus_id = nodes[target].id;
-  ctx->signals.focus_visible_id = nodes[target].id;
-  ctx->frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+  rv_move_focus(ctx, nodes[target].id, 1);
 }
 
 static void
@@ -3327,9 +5574,13 @@ rv_build_popup(RVBuildContext *ctx,
   (void)rv_add_surface(ctx, ctx->popup_id, 0,
                        UI0ControlKind_PopupSurface,
                        root_popup == ReaderViewPopup_SelectionTools ?
-                         ReaderViewSemantic_Group : ReaderViewSemantic_Menu,
+                       ReaderViewSemantic_Group : ReaderViewSemantic_Menu,
                        UI0RootKind_Popup,
-                       popup, labels.more);
+                       popup,
+                       root_popup == ReaderViewPopup_RightFilter ?
+                         labels.annotation_filters :
+                       root_popup == ReaderViewPopup_RightRowActions ?
+                         labels.annotation_actions : labels.more);
   switch (root_popup)
   {
     case ReaderViewPopup_SettingMenu:
@@ -3343,6 +5594,9 @@ rv_build_popup(RVBuildContext *ctx,
       break;
     case ReaderViewPopup_SelectionTools:
       rv_build_selection_popup(ctx, popup, labels);
+      break;
+    case ReaderViewPopup_RightFilter:
+      rv_build_right_filter_popup(ctx, popup, labels);
       break;
     default:
       break;
@@ -3360,13 +5614,1001 @@ rv_build_content_status(RVBuildContext *ctx)
                 projection->content);
 }
 
+typedef struct RVPopupItemSet
+{
+  UI0ID ids[READER_VIEW_POPUP_ITEM_SNAPSHOT_CAP];
+  UI0S32 count;
+} RVPopupItemSet;
+
+static void
+rv_popup_item_append(RVPopupItemSet *set, UI0ID id)
+{
+  if (!set || id == 0 ||
+      set->count >= READER_VIEW_POPUP_ITEM_SNAPSHOT_CAP)
+    return;
+  set->ids[set->count++] = id;
+}
+
+static UI0B32
+rv_popup_item_contains(const RVPopupItemSet *set, UI0ID id)
+{
+  UI0S32 index;
+  if (!set || id == 0) return 0;
+  for (index = 0; index < set->count; ++index)
+    if (set->ids[index] == id) return 1;
+  return 0;
+}
+
+static RVPopupItemSet
+rv_popup_items(const ReaderViewBuildInput *input, UI0B32 focusable_only)
+{
+  RVPopupItemSet result;
+  const ReaderViewProjection *projection;
+  const ReaderViewState *state;
+  UI0S32 index;
+  memset(&result, 0, sizeof(result));
+  if (!input || !input->projection || !input->state) return result;
+  projection = input->projection;
+  state = input->state;
+  switch (state->popup)
+  {
+    case ReaderViewPopup_SettingMenu:
+    {
+      const ReaderViewSettingControl *setting = rv_find_setting(
+        projection, state->active_setting_kind);
+      UI0S32 count = setting ? setting->choices.count : 0;
+      if (setting && setting->kind == ReaderViewSetting_FontFamily)
+        count = rv_min(count, RV_FONT_POPUP_CHOICE_CAP);
+      for (index = 0; setting && index < count; ++index)
+      {
+        const ReaderViewChoice *choice = setting->choices.items + index;
+        if (!focusable_only ||
+            (choice->flags & ReaderViewChoice_Enabled) != 0)
+          rv_popup_item_append(&result, rv_id(100, choice->key));
+      }
+    } break;
+
+    case ReaderViewPopup_Overflow:
+    {
+      UI0S32 row = 0;
+      if (rv_has_feature(projection, ReaderViewFeature_History))
+      {
+        if (!focusable_only || rv_has_document_flag(
+              projection, ReaderViewDocument_CanGoBack))
+          rv_popup_item_append(&result, rv_id(110, 0));
+        row += 1;
+        if (!focusable_only || rv_has_document_flag(
+              projection, ReaderViewDocument_CanGoForward))
+          rv_popup_item_append(&result, rv_id(111, 0));
+        row += 1;
+      }
+      if (rv_has_feature(projection, ReaderViewFeature_ReadingSettings))
+      {
+        for (index = 0; index < projection->settings.count && row < 7;
+             ++index, ++row)
+        {
+          const ReaderViewSettingControl *setting =
+            projection->settings.items + index;
+          if (!focusable_only ||
+              setting->status.state == ReaderViewLoad_Ready)
+            rv_popup_item_append(
+              &result, rv_id(120 + (UI0U64)setting->kind, 0));
+        }
+      }
+      if (rv_has_feature(projection, ReaderViewFeature_Annotations) && row < 7)
+      {
+        rv_popup_item_append(&result, rv_id(130, 0));
+        row += 1;
+      }
+      if (rv_has_feature(projection, ReaderViewFeature_Bookmark) && row < 7)
+      {
+        if (!focusable_only || rv_has_document_flag(
+              projection, ReaderViewDocument_Open))
+          rv_popup_item_append(&result, rv_id(131, 0));
+        row += 1;
+      }
+      if (rv_has_feature(projection, ReaderViewFeature_Fullscreen) && row < 7)
+      {
+        if (!focusable_only || rv_has_document_flag(
+              projection, ReaderViewDocument_CanToggleFullscreen))
+          rv_popup_item_append(&result, rv_id(132, 0));
+        row += 1;
+      }
+      if (rv_has_feature(projection, ReaderViewFeature_DistractionFree) &&
+          row < 7)
+      {
+        if (!focusable_only || rv_has_document_flag(
+              projection, ReaderViewDocument_CanToggleDistraction))
+          rv_popup_item_append(&result, rv_id(133, 0));
+      }
+    } break;
+
+    case ReaderViewPopup_RightFilter:
+    {
+      static const ReaderViewRightFilter order[] = {
+        ReaderViewRightFilter_All,
+        ReaderViewRightFilter_Highlights,
+        ReaderViewRightFilter_Notes,
+        ReaderViewRightFilter_Bookmarks,
+      };
+      for (index = 0; index < (UI0S32)(sizeof(order) / sizeof(order[0]));
+           ++index)
+      {
+        ReaderViewRightFilter value = order[index];
+        if ((projection->right.available_filters & rv_filter_flag(value)) != 0)
+          rv_popup_item_append(&result, rv_id(135, (ReaderViewKey)value));
+      }
+    } break;
+
+    case ReaderViewPopup_RightRowActions:
+    {
+      const ReaderViewRightRow *row = rv_find_right_row(
+        projection, state->right_menu_key);
+      if (row && (row->actions & ReaderViewRightAction_Activate) != 0)
+        rv_popup_item_append(&result, rv_id(140, row->key));
+      if (row && row->kind == ReaderViewRightRow_Highlight &&
+          (row->actions & ReaderViewRightAction_ToggleStar) != 0)
+        rv_popup_item_append(&result, rv_id(141, row->key));
+      if (row && row->kind == ReaderViewRightRow_Note &&
+          (row->actions & ReaderViewRightAction_EditNote) != 0)
+        rv_popup_item_append(&result, rv_id(142, row->key));
+      if (row && (row->actions & ReaderViewRightAction_Delete) != 0)
+        rv_popup_item_append(&result, rv_id(143, row->key));
+    } break;
+
+    case ReaderViewPopup_SelectionTools:
+    {
+      const ReaderViewSelectionProjection *selection = &projection->selection;
+      ReaderViewSelectionFlags flags = selection->flags;
+      if ((flags & ReaderViewSelection_CanCopy) != 0)
+        rv_popup_item_append(&result, rv_id(150, selection->selection_key));
+      if ((flags & (ReaderViewSelection_CanAddNote |
+                    ReaderViewSelection_CanEditNote)) != 0)
+        rv_popup_item_append(&result, rv_id(151, selection->selection_key));
+      if ((flags & ReaderViewSelection_CanDictionary) != 0)
+        rv_popup_item_append(&result, rv_id(152, selection->selection_key));
+      if ((flags & ReaderViewSelection_CanWebLookup) != 0)
+        rv_popup_item_append(&result, rv_id(153, selection->selection_key));
+      if ((flags & ReaderViewSelection_CanTranslate) != 0)
+        rv_popup_item_append(&result, rv_id(154, selection->selection_key));
+      if ((flags & ReaderViewSelection_CanRemoveHighlight) != 0)
+        rv_popup_item_append(&result, rv_id(155, selection->selection_key));
+      for (index = 0;
+           index < selection->highlight_colors.count && index < 4;
+           ++index)
+      {
+        const ReaderViewChoice *color =
+          selection->highlight_colors.items + index;
+        if (!focusable_only ||
+            (color->flags & ReaderViewChoice_Enabled) != 0)
+          rv_popup_item_append(&result, rv_id(160, color->key));
+      }
+    } break;
+
+    case ReaderViewPopup_NoteEditor:
+    {
+      const ReaderViewSelectionProjection *selection = &projection->selection;
+      UI0B32 matching = state->note_selection_key == selection->selection_key &&
+        state->note_source_revision == selection->revision;
+      rv_popup_item_append(&result, rv_id(502, state->note_selection_key));
+      if (!focusable_only || (state->note_dirty && matching))
+        rv_popup_item_append(&result, rv_id(503, state->note_selection_key));
+      rv_popup_item_append(&result, rv_id(504, state->note_selection_key));
+      if (!focusable_only ||
+          (matching &&
+           (selection->flags & ReaderViewSelection_CanDeleteNote) != 0))
+        rv_popup_item_append(&result, rv_id(505, state->note_selection_key));
+    } break;
+
+    default:
+      break;
+  }
+  return result;
+}
+
+static UI0ID
+rv_first_popup_focus_id(const ReaderViewBuildInput *input,
+                        const RVPopupItemSet *focusable)
+{
+  const ReaderViewState *state;
+  UI0S32 index;
+  if (!input || !input->state || !input->projection ||
+      !focusable || focusable->count == 0)
+    return 0;
+  state = input->state;
+  if (state->popup == ReaderViewPopup_SettingMenu)
+  {
+    const ReaderViewSettingControl *setting = rv_find_setting(
+      input->projection, state->active_setting_kind);
+    UI0S32 count = setting ? setting->choices.count : 0;
+    if (setting && setting->kind == ReaderViewSetting_FontFamily)
+      count = rv_min(count, RV_FONT_POPUP_CHOICE_CAP);
+    for (index = 0; setting && index < count; ++index)
+    {
+      const ReaderViewChoice *choice = setting->choices.items + index;
+      UI0ID id = rv_id(100, choice->key);
+      if ((choice->flags & ReaderViewChoice_Selected) != 0 &&
+          rv_popup_item_contains(focusable, id))
+        return id;
+    }
+  }
+  if (state->popup == ReaderViewPopup_RightFilter)
+  {
+    UI0ID selected = rv_id(135, (ReaderViewKey)state->right_filter);
+    if (rv_popup_item_contains(focusable, selected)) return selected;
+  }
+  return focusable->ids[0];
+}
+
+static UI0B32
+rv_prior_row_id(const ReaderViewKey *keys,
+                UI0S32 count,
+                UI0U64 tag,
+                UI0ID id,
+                ReaderViewKey *out_key)
+{
+  UI0S32 index;
+  if (out_key) *out_key = 0;
+  if (!keys || count < 0 || id == 0) return 0;
+  for (index = 0; index < count; ++index)
+  {
+    if (rv_id(tag, keys[index]) == id)
+    {
+      if (out_key) *out_key = keys[index];
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static const ReaderViewTocRow *
+rv_current_toc_row(const ReaderViewBuildInput *input, ReaderViewKey key)
+{
+  UI0S32 index;
+  if (!input || !input->state || !input->layout || !input->projection ||
+      key == 0 || !input->layout->left_panel_visible ||
+      input->state->left_panel != ReaderViewLeftPanel_Contents ||
+      input->projection->toc.status.state != ReaderViewLoad_Ready)
+    return 0;
+  for (index = 0; index < input->projection->toc.row_count; ++index)
+    if (input->projection->toc.rows[index].key == key)
+      return input->projection->toc.rows + index;
+  return 0;
+}
+
+static const ReaderViewFindRow *
+rv_current_find_row(const ReaderViewBuildInput *input, ReaderViewKey key)
+{
+  UI0S32 index;
+  if (!input || !input->state || !input->layout || !input->projection ||
+      key == 0 || !input->layout->left_panel_visible ||
+      input->state->left_panel != ReaderViewLeftPanel_Find ||
+      input->projection->find.status.state != ReaderViewLoad_Ready)
+    return 0;
+  for (index = 0; index < input->projection->find.row_count; ++index)
+    if (input->projection->find.rows[index].key == key)
+      return input->projection->find.rows + index;
+  return 0;
+}
+
+static const ReaderViewRightRow *
+rv_current_right_row(const ReaderViewBuildInput *input, ReaderViewKey key)
+{
+  const ReaderViewRightRow *row;
+  if (!input || !input->state || !input->layout || !input->projection ||
+      key == 0 || !input->layout->right_panel_visible ||
+      input->projection->right.status.state != ReaderViewLoad_Ready)
+    return 0;
+  row = rv_find_right_row(input->projection, key);
+  return row;
+}
+
+static ReaderViewKey
+rv_default_toc_key(const ReaderViewBuildInput *input)
+{
+  const ReaderViewTocProjection *toc;
+  UI0S32 index;
+  if (!input || !input->projection || !input->layout || !input->state ||
+      !input->layout->left_panel_visible ||
+      input->state->left_panel != ReaderViewLeftPanel_Contents)
+    return 0;
+  toc = &input->projection->toc;
+  if (toc->status.state != ReaderViewLoad_Ready) return 0;
+  for (index = 0; index < toc->row_count; ++index)
+    if ((toc->rows[index].flags & ReaderViewRow_Enabled) != 0 &&
+        (toc->rows[index].flags & (ReaderViewRow_Current |
+                                   ReaderViewRow_Selected)) != 0)
+      return toc->rows[index].key;
+  for (index = 0; index < toc->row_count; ++index)
+    if ((toc->rows[index].flags & ReaderViewRow_Enabled) != 0)
+      return toc->rows[index].key;
+  return 0;
+}
+
+static ReaderViewKey
+rv_default_find_key(const ReaderViewBuildInput *input)
+{
+  const ReaderViewFindProjection *find;
+  UI0S32 index;
+  if (!input || !input->projection || !input->layout || !input->state ||
+      !input->layout->left_panel_visible ||
+      input->state->left_panel != ReaderViewLeftPanel_Find)
+    return 0;
+  find = &input->projection->find;
+  if (find->status.state != ReaderViewLoad_Ready) return 0;
+  if (find->active_index >= 0 && find->active_index < find->row_count &&
+      (find->rows[find->active_index].flags & ReaderViewRow_Enabled) != 0)
+    return find->rows[find->active_index].key;
+  for (index = 0; index < find->row_count; ++index)
+    if ((find->rows[index].flags & (ReaderViewRow_Enabled |
+                                    ReaderViewRow_Selected)) ==
+        (ReaderViewRow_Enabled | ReaderViewRow_Selected))
+      return find->rows[index].key;
+  for (index = 0; index < find->row_count; ++index)
+    if ((find->rows[index].flags & ReaderViewRow_Enabled) != 0)
+      return find->rows[index].key;
+  return 0;
+}
+
+static void
+rv_state_rehome_focus(ReaderViewState *state,
+                      ReaderViewFrame *frame,
+                      UI0ID target)
+{
+  if (!state || !frame || state->focus_id == target) return;
+  state->focus_id = target;
+  if (target == 0) state->focus_visible = 0;
+  frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+}
+
+static void
+rv_reconcile_dynamic_rows(const ReaderViewBuildInput *input,
+                          ReaderViewFrame *frame)
+{
+  ReaderViewState *state;
+  ReaderViewKey key;
+  ReaderViewKey target_key;
+  UI0ID target_id;
+  UI0ID *ids[5];
+  UI0S32 id_index;
+  if (!input || !input->state || !input->projection || !frame) return;
+  state = input->state;
+
+  target_key = rv_default_toc_key(input);
+  if (state->active_toc_key != 0 &&
+      (!rv_current_toc_row(input, state->active_toc_key) ||
+       (rv_current_toc_row(input, state->active_toc_key)->flags &
+        ReaderViewRow_Enabled) == 0))
+  {
+    state->active_toc_key = target_key;
+    frame->change_flags |= ReaderViewFrameChange_StateChanged;
+  }
+  ids[0] = &state->focus_id;
+  ids[1] = &state->hot_id;
+  ids[2] = &state->active_id;
+  ids[3] = &state->pending_accessibility_focus_id;
+  ids[4] = &state->pending_accessibility_invoke_id;
+  for (id_index = 0; id_index < 5; ++id_index)
+  {
+    if (rv_prior_row_id(state->prior_toc_row_keys,
+                        state->prior_toc_row_count, 212,
+                        *ids[id_index], &key) &&
+        (!rv_current_toc_row(input, key) ||
+         (rv_current_toc_row(input, key)->flags & ReaderViewRow_Enabled) == 0))
+    {
+      if (id_index == 0)
+      {
+        target_id = target_key ? rv_id(212, target_key) :
+          (input->layout->left_panel_visible &&
+           state->left_panel == ReaderViewLeftPanel_Contents ?
+             rv_id(201, 0) : state->left_panel_restore_focus_id);
+        rv_state_rehome_focus(state, frame, target_id);
+      }
+      else
+        *ids[id_index] = 0;
+      frame->change_flags |= ReaderViewFrameChange_StateChanged;
+    }
+  }
+
+  target_key = rv_default_find_key(input);
+  if (state->active_find_key != 0 &&
+      (!rv_current_find_row(input, state->active_find_key) ||
+       (rv_current_find_row(input, state->active_find_key)->flags &
+        ReaderViewRow_Enabled) == 0))
+  {
+    state->active_find_key = target_key;
+    frame->change_flags |= ReaderViewFrameChange_StateChanged;
+  }
+  for (id_index = 0; id_index < 5; ++id_index)
+  {
+    if (rv_prior_row_id(state->prior_find_row_keys,
+                        state->prior_find_row_count, 227,
+                        *ids[id_index], &key) &&
+        (!rv_current_find_row(input, key) ||
+         (rv_current_find_row(input, key)->flags & ReaderViewRow_Enabled) == 0))
+    {
+      if (id_index == 0)
+      {
+        target_id = input->layout->left_panel_visible &&
+          state->left_panel == ReaderViewLeftPanel_Find ?
+            rv_id(220, 0) : state->left_panel_restore_focus_id;
+        rv_state_rehome_focus(state, frame, target_id);
+      }
+      else
+        *ids[id_index] = 0;
+      frame->change_flags |= ReaderViewFrameChange_StateChanged;
+    }
+  }
+
+  if (state->active_right_key != 0 &&
+      !rv_current_right_row(input, state->active_right_key))
+  {
+    state->active_right_key = 0;
+    frame->change_flags |= ReaderViewFrameChange_StateChanged;
+  }
+  for (id_index = 0; id_index < 5; ++id_index)
+  {
+    UI0B32 prior_right =
+      rv_prior_row_id(state->prior_right_row_keys,
+                      state->prior_right_row_count, 324,
+                      *ids[id_index], &key) ||
+      rv_prior_row_id(state->prior_right_row_keys,
+                      state->prior_right_row_count, 325,
+                      *ids[id_index], &key) ||
+      rv_prior_row_id(state->prior_right_row_keys,
+                      state->prior_right_row_count, 326,
+                      *ids[id_index], &key);
+    const ReaderViewRightRow *row = prior_right ?
+      rv_current_right_row(input, key) : 0;
+    UI0B32 current = row != 0;
+    if (current && *ids[id_index] == rv_id(324, key))
+      current = (row->flags & ReaderViewRow_Enabled) != 0;
+    else if (current && *ids[id_index] == rv_id(325, key))
+      current = (row->actions & ReaderViewRightAction_ToggleStar) != 0;
+    else if (current && *ids[id_index] == rv_id(326, key))
+      current = rv_right_action_popup_count(row) > 0;
+    if (prior_right && !current)
+    {
+      if (id_index == 0)
+      {
+        target_id = 0;
+        rv_state_rehome_focus(state, frame, target_id);
+      }
+      else
+        *ids[id_index] = 0;
+      frame->change_flags |= ReaderViewFrameChange_StateChanged;
+    }
+  }
+}
+
+static UI0B32
+rv_left_fixed_id(UI0ID id)
+{
+  return id != 0 &&
+    (id == rv_id(201, 0) || id == rv_id(202, 0) ||
+     id == rv_id(203, 0) || id == rv_id(220, 0) ||
+     id == rv_id(221, 0));
+}
+
+static UI0B32
+rv_right_fixed_id(UI0ID id)
+{
+  return id != 0 &&
+    (id == rv_id(302, 0) || id == rv_id(303, 0) ||
+     id == rv_id(304, 0));
+}
+
+static UI0B32
+rv_prior_left_row_id(const ReaderViewState *state, UI0ID id)
+{
+  return state &&
+    (rv_prior_row_id(state->prior_toc_row_keys,
+                     state->prior_toc_row_count, 212, id, 0) ||
+     rv_prior_row_id(state->prior_find_row_keys,
+                     state->prior_find_row_count, 227, id, 0));
+}
+
+static UI0B32
+rv_prior_right_row_id(const ReaderViewState *state, UI0ID id)
+{
+  return state &&
+    (rv_prior_row_id(state->prior_right_row_keys,
+                     state->prior_right_row_count, 324, id, 0) ||
+     rv_prior_row_id(state->prior_right_row_keys,
+                     state->prior_right_row_count, 325, id, 0) ||
+     rv_prior_row_id(state->prior_right_row_keys,
+                     state->prior_right_row_count, 326, id, 0));
+}
+
+static void
+rv_reconcile_feature_owners(const ReaderViewBuildInput *input,
+                            ReaderViewFrame *frame)
+{
+  ReaderViewState *state;
+  UI0ID *ids[5];
+  UI0S32 index;
+  UI0B32 left_supported;
+  UI0B32 right_supported;
+  if (!input || !input->state || !input->projection || !frame) return;
+  state = input->state;
+  if (!rv_has_document_flag(input->projection, ReaderViewDocument_Open))
+    return;
+  ids[0] = &state->focus_id;
+  ids[1] = &state->hot_id;
+  ids[2] = &state->active_id;
+  ids[3] = &state->pending_accessibility_focus_id;
+  ids[4] = &state->pending_accessibility_invoke_id;
+  left_supported =
+    state->left_panel == ReaderViewLeftPanel_None ||
+    (state->left_panel == ReaderViewLeftPanel_Contents &&
+     rv_has_feature(input->projection, ReaderViewFeature_Contents)) ||
+    (state->left_panel == ReaderViewLeftPanel_Find &&
+     rv_has_feature(input->projection, ReaderViewFeature_Find));
+  if (!left_supported)
+  {
+    for (index = 0; index < 5; ++index)
+    {
+      if (rv_left_fixed_id(*ids[index]) ||
+          rv_prior_left_row_id(state, *ids[index]))
+      {
+        if (index == 0)
+          rv_state_rehome_focus(state, frame, 0);
+        else
+          *ids[index] = 0;
+      }
+    }
+    state->left_panel = ReaderViewLeftPanel_None;
+    state->pending_left_panel_focus = ReaderViewLeftPanel_None;
+    state->left_panel_restore_focus_id = 0;
+    state->active_toc_key = 0;
+    state->active_find_key = 0;
+    frame->change_flags |= ReaderViewFrameChange_StateChanged |
+                           ReaderViewFrameChange_LayoutChanged;
+  }
+
+  right_supported = !state->right_panel_open ||
+    rv_has_feature(input->projection, ReaderViewFeature_Annotations);
+  if (!right_supported)
+  {
+    for (index = 0; index < 5; ++index)
+    {
+      if (rv_right_fixed_id(*ids[index]) ||
+          rv_prior_right_row_id(state, *ids[index]))
+      {
+        if (index == 0)
+          rv_state_rehome_focus(state, frame, 0);
+        else
+          *ids[index] = 0;
+      }
+    }
+    state->right_panel_open = 0;
+    state->right_panel_restore_focus_id = 0;
+    state->active_right_key = 0;
+    frame->change_flags |= ReaderViewFrameChange_StateChanged |
+                           ReaderViewFrameChange_LayoutChanged;
+  }
+}
+
+static void
+rv_reset_scroll_interaction(UI0ScrollState *scroll,
+                            ReaderViewFrame *frame)
+{
+  if (!scroll || !frame ||
+      (scroll->active_thumb_id == 0 &&
+       scroll->drag_start_pointer_y == 0 &&
+       scroll->drag_start_scroll_y == 0))
+    return;
+  memset(scroll, 0, sizeof(*scroll));
+  frame->change_flags |= ReaderViewFrameChange_StateChanged;
+}
+
+static void
+rv_reconcile_scroll_owners(const ReaderViewBuildInput *input,
+                           ReaderViewFrame *frame)
+{
+  ReaderViewState *state;
+  UI0B32 toc_owner;
+  UI0B32 find_owner;
+  UI0B32 right_owner;
+  if (!input || !input->state || !input->layout ||
+      !input->projection || !frame)
+    return;
+  state = input->state;
+  toc_owner = input->layout->left_panel_visible &&
+    state->left_panel == ReaderViewLeftPanel_Contents &&
+    input->projection->toc.status.state == ReaderViewLoad_Ready &&
+    input->projection->toc.row_count > 0;
+  find_owner = input->layout->left_panel_visible &&
+    state->left_panel == ReaderViewLeftPanel_Find &&
+    input->projection->find.status.state == ReaderViewLoad_Ready &&
+    input->projection->find.row_count > 0;
+  right_owner = input->layout->right_panel_visible &&
+    state->right_panel_open &&
+    input->projection->right.status.state == ReaderViewLoad_Ready &&
+    input->projection->right.row_count > 0;
+  if (!toc_owner) rv_reset_scroll_interaction(&state->toc_scroll, frame);
+  if (!find_owner) rv_reset_scroll_interaction(&state->find_scroll, frame);
+  if (!right_owner) rv_reset_scroll_interaction(&state->right_scroll, frame);
+}
+
+static UI0B32
+rv_popup_owner_available(const ReaderViewBuildInput *input,
+                         const RVPopupItemSet *present,
+                         const RVPopupItemSet *focusable)
+{
+  const ReaderViewState *state;
+  const ReaderViewSettingControl *setting;
+  UI0Rect menu_rect;
+  if (!input || !input->state || !input->layout || !input->projection ||
+      !present || !focusable || present->count == 0 || focusable->count == 0)
+    return 0;
+  state = input->state;
+  switch (state->popup)
+  {
+    case ReaderViewPopup_SettingMenu:
+      setting = rv_find_setting(input->projection,
+                                state->active_setting_kind);
+      return input->layout->toolbar_visible &&
+        input->layout->shared_toolbar_rect.w > 0 &&
+        rv_has_feature(input->projection,
+                       ReaderViewFeature_ReadingSettings) &&
+        setting && setting->status.state == ReaderViewLoad_Ready;
+    case ReaderViewPopup_Overflow:
+      return input->layout->toolbar_visible &&
+        input->layout->shared_toolbar_rect.w > 0;
+    case ReaderViewPopup_RightFilter:
+      return input->layout->right_panel_visible &&
+        input->projection->right.status.state == ReaderViewLoad_Ready &&
+        input->projection->right.available_filters != 0;
+    case ReaderViewPopup_RightRowActions:
+      return input->layout->right_panel_visible &&
+        input->projection->right.status.state == ReaderViewLoad_Ready &&
+        rv_right_row_menu_rect(input, state->right_menu_key, &menu_rect);
+    case ReaderViewPopup_SelectionTools:
+      return rv_has_feature(input->projection,
+                            ReaderViewFeature_SelectionTools) &&
+        input->projection->selection.status.state ==
+               ReaderViewLoad_Ready &&
+        (input->projection->selection.flags & ReaderViewSelection_Active) != 0 &&
+        input->projection->selection.selection_key != 0;
+    case ReaderViewPopup_NoteEditor:
+      return state->note_selection_key != 0;
+    default:
+      return 0;
+  }
+}
+
+static void
+rv_reconcile_popup_state(const ReaderViewBuildInput *input,
+                         ReaderViewFrame *frame)
+{
+  ReaderViewState *state;
+  RVPopupItemSet present;
+  RVPopupItemSet focusable;
+  UI0ID old_focus;
+  UI0ID target;
+  UI0S32 index;
+  if (!input || !input->state || !frame) return;
+  state = input->state;
+  old_focus = state->focus_id;
+  if (state->popup == ReaderViewPopup_None)
+  {
+    if (state->prior_popup_item_count > 0)
+    {
+      rv_clear_prior_popup_interaction(state, state->restore_focus_id);
+      state->restore_focus_id = 0;
+      frame->change_flags |= ReaderViewFrameChange_StateChanged;
+      if (state->focus_id != old_focus)
+        frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+    }
+    return;
+  }
+
+  present = rv_popup_items(input, 0);
+  focusable = rv_popup_items(input, 1);
+  if (state->prior_popup_kind != ReaderViewPopup_None &&
+      state->prior_popup_kind != state->popup)
+  {
+    rv_clear_prior_popup_interaction(state, state->restore_focus_id);
+    frame->change_flags |= ReaderViewFrameChange_StateChanged;
+  }
+
+  if (!rv_popup_owner_available(input, &present, &focusable))
+  {
+    target = 0;
+    if (rv_popup_item_contains(&present, state->focus_id))
+      rv_state_rehome_focus(state, frame, target);
+    rv_clear_prior_popup_interaction(state, target);
+    if (state->popup == ReaderViewPopup_SelectionTools)
+      state->dismissed_selection_key = state->last_selection_key;
+    if (state->popup == ReaderViewPopup_RightFilter)
+      state->right_filter_menu_flags = 0;
+    if (state->popup == ReaderViewPopup_RightRowActions)
+    {
+      state->right_menu_key = 0;
+      state->right_menu_actions = ReaderViewRightAction_None;
+    }
+    state->popup = ReaderViewPopup_None;
+    state->restore_focus_id = 0;
+    frame->change_flags |= ReaderViewFrameChange_StateChanged;
+    if (state->focus_id != old_focus)
+      frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+    return;
+  }
+
+  for (index = 0; index < state->prior_popup_item_count; ++index)
+  {
+    UI0ID prior_id = state->prior_popup_item_ids[index];
+    if (rv_popup_item_contains(&present, prior_id)) continue;
+    if (state->hot_id == prior_id) state->hot_id = 0;
+    if (state->active_id == prior_id) state->active_id = 0;
+    if (state->pending_accessibility_focus_id == prior_id)
+      state->pending_accessibility_focus_id = 0;
+    if (state->pending_accessibility_invoke_id == prior_id)
+      state->pending_accessibility_invoke_id = 0;
+  }
+  if (!rv_popup_item_contains(&focusable, state->focus_id))
+  {
+    target = rv_first_popup_focus_id(input, &focusable);
+    rv_state_rehome_focus(state, frame, target);
+  }
+  if (state->focus_id != old_focus)
+    frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+}
+
+static void
+rv_capture_state_snapshots(RVBuildContext *ctx,
+                           ReaderViewPopupKind built_popup)
+{
+  ReaderViewState *state;
+  const ReaderViewProjection *projection;
+  UI0S32 index;
+  if (!ctx || !ctx->input || !ctx->input->state ||
+      !ctx->input->projection)
+    return;
+  state = ctx->input->state;
+  projection = ctx->input->projection;
+  state->prior_toc_row_count = 0;
+  for (index = 0; index < projection->toc.row_count; ++index)
+  {
+    ReaderViewKey key = projection->toc.rows[index].key;
+    if (state->prior_toc_row_count < READER_VIEW_TOC_ROW_CAP)
+      state->prior_toc_row_keys[state->prior_toc_row_count++] = key;
+  }
+  state->prior_find_row_count = 0;
+  for (index = 0; index < projection->find.row_count; ++index)
+  {
+    ReaderViewKey key = projection->find.rows[index].key;
+    if (state->prior_find_row_count < READER_VIEW_FIND_ROW_CAP)
+      state->prior_find_row_keys[state->prior_find_row_count++] = key;
+  }
+  state->prior_right_row_count = 0;
+  for (index = 0; index < projection->right.row_count; ++index)
+  {
+    ReaderViewKey key = projection->right.rows[index].key;
+    if (state->prior_right_row_count < READER_VIEW_RIGHT_ROW_CAP)
+      state->prior_right_row_keys[state->prior_right_row_count++] = key;
+  }
+
+  state->prior_popup_item_count = 0;
+  state->prior_popup_kind = ReaderViewPopup_None;
+  if (built_popup != ReaderViewPopup_None &&
+      state->popup != ReaderViewPopup_None)
+  {
+    state->prior_popup_kind = built_popup;
+    for (index = 0; index < ctx->control_count &&
+         state->prior_popup_item_count <
+           READER_VIEW_POPUP_ITEM_SNAPSHOT_CAP; ++index)
+    {
+      const UI0ControlRecord *record =
+        ctx->storage->control_records + index;
+      if (record->root == UI0RootKind_Normal ||
+          record->kind == UI0ControlKind_PopupSurface ||
+          record->kind == UI0ControlKind_ModalSurface)
+        continue;
+      state->prior_popup_item_ids[state->prior_popup_item_count++] =
+        record->id;
+    }
+  }
+}
+
+static UI0U32
+rv_find_text_codepoint(const char *text,
+                       UI0S32 byte_count,
+                       UI0S32 index,
+                       UI0S32 *out_size)
+{
+  unsigned char byte;
+  UI0U32 codepoint;
+  UI0S32 size = 1;
+  if (out_size) *out_size = 0;
+  if (!text || !out_size || index < 0 || index >= byte_count) return 0;
+  byte = (unsigned char)text[index];
+  codepoint = byte;
+  if ((byte & 0x80u) == 0)
+  {
+    *out_size = 1;
+    return codepoint;
+  }
+  if ((byte & 0xe0u) == 0xc0u && index + 1 < byte_count &&
+      (((unsigned char)text[index + 1]) & 0xc0u) == 0x80u)
+  {
+    codepoint = ((UI0U32)(byte & 0x1fu) << 6) |
+                (UI0U32)(((unsigned char)text[index + 1]) & 0x3fu);
+    size = 2;
+  }
+  else if ((byte & 0xf0u) == 0xe0u && index + 2 < byte_count &&
+           (((unsigned char)text[index + 1]) & 0xc0u) == 0x80u &&
+           (((unsigned char)text[index + 2]) & 0xc0u) == 0x80u)
+  {
+    codepoint = ((UI0U32)(byte & 0x0fu) << 12) |
+                ((UI0U32)(((unsigned char)text[index + 1]) & 0x3fu) << 6) |
+                (UI0U32)(((unsigned char)text[index + 2]) & 0x3fu);
+    size = 3;
+  }
+  else if ((byte & 0xf8u) == 0xf0u && index + 3 < byte_count &&
+           (((unsigned char)text[index + 1]) & 0xc0u) == 0x80u &&
+           (((unsigned char)text[index + 2]) & 0xc0u) == 0x80u &&
+           (((unsigned char)text[index + 3]) & 0xc0u) == 0x80u)
+  {
+    codepoint = ((UI0U32)(byte & 0x07u) << 18) |
+                ((UI0U32)(((unsigned char)text[index + 1]) & 0x3fu) << 12) |
+                ((UI0U32)(((unsigned char)text[index + 2]) & 0x3fu) << 6) |
+                (UI0U32)(((unsigned char)text[index + 3]) & 0x3fu);
+    size = 4;
+  }
+  *out_size = size;
+  return codepoint;
+}
+
+static UI0S32
+rv_find_codepoint_advance(const ReaderViewFindTextMetrics *metrics,
+                          UI0U32 codepoint)
+{
+  UI0S32 index;
+  if (!metrics) return 0;
+  for (index = 0; index < metrics->advance_count; ++index)
+    if (metrics->advances[index].codepoint == codepoint)
+      return metrics->advances[index].advance;
+  return metrics->fallback_advance;
+}
+
+static UI0S32
+rv_find_text_measure(void *user_data,
+                     const char *text,
+                     UI0S32 byte_count)
+{
+  const ReaderViewFindTextMetrics *metrics =
+    (const ReaderViewFindTextMetrics *)user_data;
+  UI0S32 index = 0;
+  UI0S32 current_width = 0;
+  UI0S32 max_width = 0;
+  if (!metrics || !text || byte_count <= 0) return 0;
+  while (index < byte_count)
+  {
+    UI0S32 size;
+    UI0U32 codepoint = rv_find_text_codepoint(text, byte_count, index, &size);
+    UI0S32 advance;
+    if (size <= 0) break;
+    index += size;
+    if (codepoint == (UI0U32)'\r') continue;
+    if (codepoint == (UI0U32)'\n')
+    {
+      max_width = rv_max(max_width, current_width);
+      current_width = 0;
+      continue;
+    }
+    advance = rv_find_codepoint_advance(metrics, codepoint);
+    current_width = current_width > 0x7fffffff - advance ?
+      0x7fffffff : current_width + advance;
+  }
+  return rv_max(max_width, current_width);
+}
+
 static UI0B32
 rv_build_input_valid(const ReaderViewBuildInput *input,
                      ReaderViewFrameStorage *storage,
                      ReaderViewFrame *out_frame)
 {
-  return input && storage && out_frame && input->state && input->layout &&
-         input->projection && input->input && input->theme;
+  UI0S32 index;
+  UI0S32 earlier;
+  UI0B32 metrics_required;
+  UI0B32 metrics_present;
+  if (!input || !storage || !out_frame || !input->state || !input->layout ||
+      !input->projection || !input->input || !input->theme)
+    return 0;
+  metrics_required =
+    (input->projection->features & ReaderViewFeature_Find) != 0;
+  metrics_present = input->find_text_metrics.advances != 0 ||
+    input->find_text_metrics.advance_count != 0 ||
+    input->find_text_metrics.fallback_advance != 0;
+  if ((metrics_required &&
+       (input->find_text_metrics.fallback_advance <= 0 ||
+        input->find_text_metrics.fallback_advance > 0x100000)) ||
+      (!metrics_required && metrics_present &&
+       (input->find_text_metrics.fallback_advance <= 0 ||
+        input->find_text_metrics.fallback_advance > 0x100000)) ||
+      input->find_text_metrics.advance_count < 0 ||
+      input->find_text_metrics.advance_count >
+        READER_VIEW_FIND_CODEPOINT_ADVANCE_CAP ||
+      (input->find_text_metrics.advance_count > 0 &&
+       !input->find_text_metrics.advances))
+    return 0;
+  for (index = 0;
+       index < input->find_text_metrics.advance_count;
+       ++index)
+  {
+    const ReaderViewCodepointAdvance *item =
+      input->find_text_metrics.advances + index;
+    if (item->codepoint == 0 || item->codepoint > 0x10ffffu ||
+        (item->codepoint >= 0xd800u && item->codepoint <= 0xdfffu) ||
+        item->advance < 0 || item->advance > 0x100000)
+      return 0;
+    for (earlier = 0; earlier < index; ++earlier)
+      if (input->find_text_metrics.advances[earlier].codepoint ==
+          item->codepoint)
+        return 0;
+  }
+  return 1;
+}
+
+static UI0B32
+rv_published_focusable_id(const RVBuildContext *ctx, UI0ID id)
+{
+  UI0S32 index;
+  if (!ctx || id == 0) return 0;
+  for (index = 0; index < ctx->semantic_count; ++index)
+  {
+    const ReaderViewSemanticNode *node =
+      ctx->storage->semantic_nodes + index;
+    if (node->id == id &&
+        (node->flags & ReaderViewSemantic_Focusable) != 0)
+      return 1;
+  }
+  return 0;
+}
+
+static UI0B32
+rv_published_signal_id(const RVBuildContext *ctx, UI0ID id)
+{
+  UI0S32 index;
+  if (!ctx || id == 0) return 0;
+  for (index = 0; index < ctx->signals.record_count; ++index)
+    if (ctx->signals.records[index].id == id) return 1;
+  return 0;
+}
+
+static void
+rv_reconcile_published_interaction(RVBuildContext *ctx)
+{
+  if (!ctx) return;
+  if (ctx->signals.focus_id != 0 &&
+      !rv_published_focusable_id(ctx, ctx->signals.focus_id))
+    rv_move_focus(ctx, 0, 0);
+  if (ctx->signals.hot_id != 0 &&
+      !rv_published_signal_id(ctx, ctx->signals.hot_id))
+  {
+    ctx->signals.hot_id = 0;
+    ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
+  }
+  if (ctx->signals.active_id != 0 &&
+      !rv_published_signal_id(ctx, ctx->signals.active_id))
+  {
+    ctx->signals.active_id = 0;
+    ctx->frame->change_flags |= ReaderViewFrameChange_StateChanged;
+  }
+}
+
+static UI0B32
+rv_consume_accessibility_requests(ReaderViewState *state)
+{
+  if (!state ||
+      (state->pending_accessibility_focus_id == 0 &&
+       state->pending_accessibility_invoke_id == 0))
+    return 0;
+  state->pending_accessibility_focus_id = 0;
+  state->pending_accessibility_invoke_id = 0;
+  return 1;
 }
 
 UI0B32
@@ -3380,12 +6622,21 @@ reader_view_build(const ReaderViewBuildInput *input,
   ReaderViewPopupKind root_popup;
   UI0Rect root_rect;
   UI0ID old_focus;
+  UI0ID pre_end_focus;
+  UI0B32 pre_end_focus_visible;
   UI0B32 popup_dismiss;
-  if (!out_frame) return 0;
+  UI0S32 late_control_index;
+  if (!out_frame)
+  {
+    if (input) (void)rv_consume_accessibility_requests(input->state);
+    return 0;
+  }
   memset(out_frame, 0, sizeof(*out_frame));
   if (!rv_build_input_valid(input, storage, out_frame))
   {
     out_frame->error_flags = ReaderViewFrameError_BadInput;
+    if (input && rv_consume_accessibility_requests(input->state))
+      out_frame->change_flags |= ReaderViewFrameChange_StateChanged;
     return 0;
   }
   reader_view_frame_storage_init(storage);
@@ -3395,6 +6646,8 @@ reader_view_build(const ReaderViewBuildInput *input,
   {
     out_frame->error_flags = projection_errors;
     out_frame->change_flags = ReaderViewFrameChange_ProjectionInvalid;
+    if (rv_consume_accessibility_requests(input->state))
+      out_frame->change_flags |= ReaderViewFrameChange_StateChanged;
     return 0;
   }
   if (input->state->document_key != input->projection->document_key)
@@ -3406,16 +6659,71 @@ reader_view_build(const ReaderViewBuildInput *input,
     {
       out_frame->error_flags = ReaderViewFrameError_StaleDocumentState;
       out_frame->change_flags = ReaderViewFrameChange_ProjectionInvalid;
+      if (rv_consume_accessibility_requests(input->state))
+        out_frame->change_flags |= ReaderViewFrameChange_StateChanged;
       return 0;
     }
   }
+  old_focus = input->state->focus_id;
 
   memset(&ctx, 0, sizeof(ctx));
   ctx.input = input;
   ctx.storage = storage;
   ctx.frame = out_frame;
+  ui0_layout_begin(&ctx.input_layout,
+                   storage->layout_boxes,
+                   READER_VIEW_LAYOUT_BOX_CAP);
+  ui0_text_input_context_init(&ctx.text_inputs);
+  ui0_text_input_begin_frame(&ctx.text_inputs,
+                             storage->text_input_records,
+                             READER_VIEW_TEXT_INPUT_CAP);
+  ctx.text_inputs.frame_index = input->frame_index;
+  ctx.text_inputs.style = ui0_text_input_style_from_resolved(input->theme);
+  if (input->find_text_metrics.fallback_advance > 0)
+  {
+    ctx.text_inputs.style.measure.measure = rv_find_text_measure;
+    ctx.text_inputs.style.measure.user_data =
+      (void *)(const void *)&input->find_text_metrics;
+    ctx.text_inputs.style.measure.fallback_char_width =
+      input->find_text_metrics.fallback_advance;
+  }
   labels = rv_resolve_labels(input->projection->labels);
+  rv_reconcile_feature_owners(input, out_frame);
+  rv_reconcile_scroll_owners(input, out_frame);
   rv_sync_selection_popup(&ctx);
+  rv_reconcile_dynamic_rows(input, out_frame);
+  if (input->state->right_menu_key != 0)
+  {
+    const ReaderViewRightRow *menu_row = rv_find_right_row(
+      input->projection, input->state->right_menu_key);
+    UI0B32 row_identity_changed = !menu_row ||
+      menu_row->kind != input->state->right_menu_kind;
+    UI0B32 action_membership_changed =
+      input->state->popup == ReaderViewPopup_RightRowActions && menu_row &&
+      menu_row->actions != input->state->right_menu_actions;
+    UI0B32 empty_open_popup =
+      input->state->popup == ReaderViewPopup_RightRowActions &&
+      rv_right_action_popup_count(menu_row) == 0;
+    if (row_identity_changed || action_membership_changed || empty_open_popup)
+    {
+      UI0B32 focus_changed = rv_close_stale_right_action_popup(
+        input->state, row_identity_changed);
+      out_frame->change_flags |= ReaderViewFrameChange_StateChanged;
+      if (focus_changed)
+        out_frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+    }
+  }
+  if (input->state->popup == ReaderViewPopup_RightFilter &&
+      input->state->right_filter_menu_flags !=
+        input->projection->right.available_filters)
+  {
+    UI0B32 focus_changed =
+      rv_close_stale_right_filter_popup(input->state);
+    out_frame->change_flags |= ReaderViewFrameChange_StateChanged;
+    if (focus_changed)
+      out_frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+  }
+  rv_reconcile_popup_state(input, out_frame);
   root_popup = input->state->popup;
   root_rect = root_popup == ReaderViewPopup_NoteEditor ?
     rv_centered_rect(input->layout->bounds, RV_NOTE_WIDTH, RV_NOTE_HEIGHT) :
@@ -3447,16 +6755,52 @@ reader_view_build(const ReaderViewBuildInput *input,
   ui0_scroll_begin_frame(&ctx.scrolls, storage->scroll_records,
                          READER_VIEW_SCROLL_CAP);
   ctx.scrolls.frame_index = input->frame_index;
+  ui0_sidenav_context_init(&ctx.sidenav_visuals);
+  ui0_sidenav_begin_frame(
+    &ctx.sidenav_visuals,
+    storage->reference_sidenav_records,
+    READER_VIEW_REFERENCE_SIDENAV_RECORD_CAP);
+  ctx.sidenav_visuals.frame_index = input->frame_index;
 
   if (popup_dismiss && root_popup != ReaderViewPopup_NoteEditor)
   {
+    UI0ID restore_id = input->state->restore_focus_id;
+    UI0S32 popup_index;
+    UI0B32 focus_visible =
+      ctx.signals.focus_id != 0 &&
+      ctx.signals.focus_visible_id == ctx.signals.focus_id;
     if (root_popup == ReaderViewPopup_SelectionTools)
       input->state->dismissed_selection_key = input->state->last_selection_key;
+    for (popup_index = 0;
+         popup_index < input->state->prior_popup_item_count;
+         ++popup_index)
+    {
+      UI0ID id = input->state->prior_popup_item_ids[popup_index];
+      if (ctx.signals.hot_id == id) ctx.signals.hot_id = 0;
+      if (ctx.signals.active_id == id) ctx.signals.active_id = 0;
+    }
+    rv_clear_prior_popup_interaction(input->state, restore_id);
     input->state->popup = ReaderViewPopup_None;
+    input->state->restore_focus_id = 0;
+    if (root_popup == ReaderViewPopup_RightFilter)
+      input->state->right_filter_menu_flags = 0;
+    if (root_popup == ReaderViewPopup_RightRowActions)
+    {
+      input->state->right_menu_key = 0;
+      input->state->right_menu_actions = ReaderViewRightAction_None;
+    }
+    rv_move_focus(&ctx, restore_id, focus_visible);
     out_frame->change_flags |= ReaderViewFrameChange_StateChanged;
   }
   rv_handle_escape(&ctx);
-  old_focus = ctx.signals.focus_id;
+  if (input->state->popup != root_popup)
+  {
+    ui0_signal_set_root(&ctx.signals, UI0RootKind_Popup,
+                        rv_rect(0, 0, 0, 0), 0);
+    ui0_signal_set_root(&ctx.signals, UI0RootKind_Modal,
+                        rv_rect(0, 0, 0, 0), 0);
+    ui0_signal_resolve_roots(&ctx.signals);
+  }
   rv_build_toolbar(&ctx, labels);
   rv_build_paging_and_progress(&ctx, labels);
   rv_build_content_status(&ctx);
@@ -3465,7 +6809,21 @@ reader_view_build(const ReaderViewBuildInput *input,
   rv_build_popup(&ctx, root_popup, root_rect, labels);
   rv_apply_semantic_focus_navigation(&ctx);
 
+  pre_end_focus = ctx.signals.focus_id;
+  pre_end_focus_visible = pre_end_focus != 0 &&
+    ctx.signals.focus_visible_id == pre_end_focus;
   ui0_signal_end_frame(&ctx.signals);
+  rv_reconcile_published_interaction(&ctx);
+  rv_patch_built_focus(&ctx, pre_end_focus, 0, 0);
+  rv_patch_built_focus(
+    &ctx, ctx.signals.focus_id, ctx.signals.focus_id != 0,
+    ctx.signals.focus_id != 0 &&
+      ctx.signals.focus_visible_id == ctx.signals.focus_id);
+  if (pre_end_focus != ctx.signals.focus_id ||
+      pre_end_focus_visible !=
+        (ctx.signals.focus_id != 0 &&
+         ctx.signals.focus_visible_id == ctx.signals.focus_id))
+    out_frame->change_flags |= ReaderViewFrameChange_FocusChanged;
   input->state->hot_id = ctx.signals.hot_id;
   input->state->active_id = ctx.signals.active_id;
   input->state->focus_id = ctx.signals.focus_id;
@@ -3474,21 +6832,36 @@ reader_view_build(const ReaderViewBuildInput *input,
     ctx.signals.focus_id != 0;
   if (old_focus != ctx.signals.focus_id)
     out_frame->change_flags |= ReaderViewFrameChange_FocusChanged;
+  if (rv_consume_accessibility_requests(input->state))
+  {
+    out_frame->change_flags |= ReaderViewFrameChange_StateChanged;
+  }
+  rv_capture_state_snapshots(&ctx, root_popup);
 
   ui0_draw_context_init(&ctx.draw);
   ui0_draw_begin_frame(&ctx.draw, storage->draw_commands,
                        READER_VIEW_DRAW_COMMAND_CAP,
                        ui0_draw_theme_from_resolved(input->theme));
   ctx.draw.frame_index = input->frame_index;
+  late_control_index = ctx.control_count;
+  for (UI0S32 control_index = 0;
+       control_index < ctx.control_count;
+       ++control_index)
+  {
+    if (storage->control_records[control_index].root != UI0RootKind_Normal)
+    {
+      late_control_index = control_index;
+      break;
+    }
+  }
   (void)ui0_draw_controls(&ctx.draw, storage->control_records,
-                          ctx.control_count);
+                          late_control_index);
   (void)ui0_slider_draw_records(&ctx.draw, &ctx.sliders);
-  (void)ui0_scroll_draw_records(&ctx.draw, &ctx.scrolls);
   for (UI0S32 icon_index = 0; icon_index < ctx.icon_count; ++icon_index)
   {
     const RVIconRecord *icon = ctx.icons + icon_index;
     if (icon->visible && icon->control_index >= 0 &&
-        icon->control_index < ctx.control_count)
+        icon->control_index < late_control_index)
     {
       (void)ui0_draw_push_icon(&ctx.draw,
                                storage->control_records + icon->control_index,
@@ -3497,15 +6870,42 @@ reader_view_build(const ReaderViewBuildInput *input,
     }
   }
   rv_filter_reference_chrome_draws(&ctx);
+  ui0_draw_set_text_caret_visible(
+    &ctx.draw, rv_text_caret_is_visible(input->frame_index));
+  (void)ui0_text_input_draw_records(&ctx.draw,
+                                    storage->text_input_records,
+                                    ctx.text_inputs.record_count);
+  (void)ui0_sidenav_draw_records(&ctx.draw, &ctx.sidenav_visuals);
+  (void)ui0_scroll_draw_records(&ctx.draw, &ctx.scrolls);
+  (void)ui0_draw_controls(
+    &ctx.draw,
+    storage->control_records + late_control_index,
+    ctx.control_count - late_control_index);
+  for (UI0S32 icon_index = 0; icon_index < ctx.icon_count; ++icon_index)
+  {
+    const RVIconRecord *icon = ctx.icons + icon_index;
+    if (icon->visible && icon->control_index >= late_control_index &&
+        icon->control_index < ctx.control_count)
+    {
+      (void)ui0_draw_push_icon(&ctx.draw,
+                               storage->control_records + icon->control_index,
+                               icon->icon_kind,
+                               icon->rect);
+    }
+  }
 
   if ((ctx.signals.error_flags & UI0SignalError_NoRecordCap) != 0 ||
       (ctx.sliders.error_flags & UI0SliderError_NoRecordCap) != 0 ||
       (ctx.scrolls.error_flags & UI0ScrollError_NoRecordCap) != 0 ||
+      (ctx.text_inputs.error_flags & UI0TextInputError_NoRecordCap) != 0 ||
+      (ctx.sidenav_visuals.error_flags & UI0SidenavError_NoRecordCap) != 0 ||
       (ctx.draw.error_flags & UI0DrawError_NoCommandCap) != 0)
     out_frame->error_flags |= ReaderViewFrameError_RecordCap;
   if ((ctx.signals.error_flags & UI0SignalError_BadInput) != 0 ||
       (ctx.sliders.error_flags & UI0SliderError_BadInput) != 0 ||
       (ctx.scrolls.error_flags & UI0ScrollError_BadInput) != 0 ||
+      (ctx.text_inputs.error_flags & UI0TextInputError_BadInput) != 0 ||
+      (ctx.sidenav_visuals.error_flags & UI0SidenavError_BadInput) != 0 ||
       (ctx.draw.error_flags & UI0DrawError_BadInput) != 0)
     out_frame->error_flags |= ReaderViewFrameError_BadInput;
 

@@ -144,6 +144,17 @@ rvd_projection_hash(const ReaderViewProjection *projection,
   RVD_LABEL(save_note); RVD_LABEL(cancel); RVD_LABEL(delete_value);
   RVD_LABEL(copy); RVD_LABEL(dictionary); RVD_LABEL(web_lookup);
   RVD_LABEL(translate); RVD_LABEL(more);
+  RVD_LABEL(close_navigation); RVD_LABEL(search_input);
+  RVD_LABEL(clear_search); RVD_LABEL(annotation_actions);
+  RVD_LABEL(annotation_filters); RVD_LABEL(export_annotations);
+  RVD_LABEL(close_annotations); RVD_LABEL(delete_bookmark);
+  RVD_LABEL(delete_note); RVD_LABEL(delete_highlight);
+  RVD_LABEL(contents_short); RVD_LABEL(contents_panel_title);
+  RVD_LABEL(find_panel_title); RVD_LABEL(filter_annotations);
+  RVD_LABEL(no_contents); RVD_LABEL(find_prompt); RVD_LABEL(no_matches);
+  RVD_LABEL(no_annotations); RVD_LABEL(no_bookmarks);
+  RVD_LABEL(no_highlights); RVD_LABEL(no_notes);
+  RVD_LABEL(find_placeholder);
 #undef RVD_LABEL
   hash = rvd_hash_status(hash, projection->progress.status);
   hash = rvd_hash_u64(hash, projection->progress.location_index);
@@ -198,6 +209,10 @@ rvd_projection_hash(const ReaderViewProjection *projection,
   hash = rvd_hash_u64(hash, projection->right.total_count);
   hash = rvd_hash_u64(hash, (UI0U64)projection->right.has_more);
   hash = rvd_hash_u64(hash, projection->right.available_filters);
+  hash = rvd_hash_u64(hash, projection->right.all_count);
+  hash = rvd_hash_u64(hash, projection->right.bookmark_count);
+  hash = rvd_hash_u64(hash, projection->right.highlight_count);
+  hash = rvd_hash_u64(hash, projection->right.note_count);
   for (index = 0; projection->right.rows && index < projection->right.row_count; ++index)
   {
     const ReaderViewRightRow *row = projection->right.rows + index;
@@ -206,6 +221,7 @@ rvd_projection_hash(const ReaderViewProjection *projection,
     hash = rvd_hash_text(hash, row->primary);
     hash = rvd_hash_text(hash, row->secondary);
     hash = rvd_hash_u64(hash, rvd_normalized_key(projection, row->color_key));
+    hash = rvd_hash_u64(hash, row->rail_color);
     hash = rvd_hash_u64(hash, row->flags);
     hash = rvd_hash_u64(hash, row->actions);
   }
@@ -353,7 +369,8 @@ static UI0U64
 rvd_action_value(const ReaderViewAction *action)
 {
   if (action->kind == ReaderViewAction_SaveNote ||
-      action->kind == ReaderViewAction_DeleteNote)
+      action->kind == ReaderViewAction_DeleteNote ||
+      action->kind == ReaderViewAction_CancelNote)
     return action->value != 0;
   return action->value;
 }

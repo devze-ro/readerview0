@@ -143,8 +143,10 @@ NextPage actions.
 
 Progress uses the entire accepted page width and preserves its semantic slider
 range, focus, keyboard movement, and SeekLocation action. Its visible thumb is
-suppressed while idle and appears for hover, press, active, focus-visible, or
-drag state. The metadata label is placed from the resolved track height,
+suppressed while idle and appears only for hover, press, active, or drag state.
+The frozen reference does not paint a thumb or focus ring merely because the
+slider has keyboard or accessibility focus; its focused semantic state and
+keyboard seek behavior remain live. The metadata label is placed from the resolved track height,
 ControlGap spacing token, and Body line height, then published with the muted
 chrome-metadata style. The public progress location remains zero-based even
 though the accepted visual slider position is one-based.
@@ -171,7 +173,7 @@ bounded SelectSetting action; no menu allocation or host callback is added.
 
 - readerview0 API: 3;
 - readerview0 version: `0.3.0-dev`;
-- UI0 commit: `0ad8a43b658f67715720602abe779fb0d33052e1`;
+- UI0 commit: `cadafcacdae8e63cf0d2b505f54e2a2a228c0bec`;
 - UI0 API: 91;
 - UI0 version: `0.1.0-dev`;
 - zero_foundation source closure:
@@ -210,6 +212,10 @@ Strict MSVC C11 `/W4 /WX` validation covers:
 
 Host adoption, decoded-pixel comparison, and host-specific interaction checks
 are recorded in each consumer repository rather than inferred from package
-tests. This package slice deliberately keeps the existing left/right panel
-internals, selection tools, and note-editor details unchanged. It adds no PDF
+tests. At this Slice 2 checkpoint the left/right panel internals were unchanged;
+the subsequent
+`reader_view_recovery_slice3_reference_panels_api3.md` record supersedes that
+temporary deferral and locks the accepted TOC, Find, Annotations, and disabled
+gutter contracts within API 3. Selection tools and note-editor details not
+explicitly covered by that follow-up remain deferred. This slice adds no PDF
 support and begins no Kindle-gap feature work.

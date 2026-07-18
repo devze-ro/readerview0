@@ -4,6 +4,7 @@
 enum
 {
   READER_VIEW_FIND_QUERY_CAP = 128,
+  READER_VIEW_FIND_CODEPOINT_ADVANCE_CAP = 256,
   READER_VIEW_NOTE_DRAFT_CAP = 512,
   READER_VIEW_FIND_HISTORY_EDIT_CAP = 16,
   READER_VIEW_FIND_HISTORY_TEXT_CAP = 512,
@@ -25,11 +26,14 @@ enum
   READER_VIEW_TOOLBAR_SLOT_CAP = 20,
   READER_VIEW_LIST_RECORD_CAP = 208,
   READER_VIEW_SIDENAV_RECORD_CAP = 64,
+  READER_VIEW_REFERENCE_SIDENAV_RECORD_CAP = READER_VIEW_TOC_ROW_CAP + 2,
   READER_VIEW_TEXT_INPUT_CAP = 1,
   READER_VIEW_TEXT_AREA_CAP = 1,
   READER_VIEW_SLIDER_CAP = 2,
   READER_VIEW_SCROLL_CAP = 4,
+  READER_VIEW_POPUP_ITEM_SNAPSHOT_CAP = 32,
   READER_VIEW_TEXT_BINDING_CAP = 640,
+  READER_VIEW_RIGHT_FILTER_LABEL_CAP = 256,
   READER_VIEW_SEMANTIC_NODE_CAP = 384,
   READER_VIEW_DEFAULT_PAGE_HORIZONTAL_INSET = 24,
   READER_VIEW_DEFAULT_PAGE_MAX_WIDTH = 660,
@@ -51,6 +55,26 @@ typedef struct ReaderViewText
   const char *data;
   UI0S32 size;
 } ReaderViewText;
+
+/*
+ * Concrete font measurement remains host-owned. The host supplies bounded
+ * per-codepoint advances from the same system-UI face used to paint Find text;
+ * readerview0 consumes only these portable values and exposes no caller
+ * executable indirection or provider boundary. Missing codepoints use the
+ * caller-measured fallback advance.
+ */
+typedef struct ReaderViewCodepointAdvance
+{
+  UI0U32 codepoint;
+  UI0S32 advance;
+} ReaderViewCodepointAdvance;
+
+typedef struct ReaderViewFindTextMetrics
+{
+  const ReaderViewCodepointAdvance *advances;
+  UI0S32 advance_count;
+  UI0S32 fallback_advance;
+} ReaderViewFindTextMetrics;
 
 typedef UI0U64 ReaderViewKey;
 
@@ -108,6 +132,8 @@ enum
   ReaderViewRow_Current  = 1u << 1,
   ReaderViewRow_Selected = 1u << 2,
   ReaderViewRow_Starred  = 1u << 3,
+  /* The row is a note visually attached to the preceding highlight row. */
+  ReaderViewRow_AttachedToPrevious = 1u << 4,
 };
 
 typedef struct ReaderViewTocRow
@@ -142,7 +168,13 @@ enum
 {
   ReaderViewRightAction_None       = 0,
   ReaderViewRightAction_Activate   = 1u << 0,
+  /*
+   * Enables the frozen inline star for every right-row kind. The same action
+   * is also present in the popup only for Highlight rows; Bookmark and Note
+   * popup membership is kind-specific.
+   */
   ReaderViewRightAction_ToggleStar = 1u << 1,
+  /* Valid only for Note rows and exposed in the Note action popup. */
   ReaderViewRightAction_EditNote   = 1u << 2,
   ReaderViewRightAction_Delete     = 1u << 3,
 };
@@ -157,6 +189,8 @@ typedef struct ReaderViewRightRow
   ReaderViewKey color_key;
   ReaderViewRowFlags flags;
   ReaderViewRightActionFlags actions;
+  /* Append-only caller-resolved visual; color_key remains identity. */
+  UI0Color rail_color;
 } ReaderViewRightRow;
 
 typedef UI0U64 ReaderViewFeatureFlags;
@@ -271,6 +305,11 @@ typedef struct ReaderViewRightProjection
   UI0U64 total_count;
   UI0B32 has_more;
   ReaderViewRightFilterFlags available_filters;
+  /* Explicit unfiltered totals used by the frozen annotation-filter labels. */
+  UI0U64 all_count;
+  UI0U64 bookmark_count;
+  UI0U64 highlight_count;
+  UI0U64 note_count;
 } ReaderViewRightProjection;
 
 typedef UI0U32 ReaderViewSelectionFlags;
@@ -339,6 +378,30 @@ typedef struct ReaderViewLabels
   ReaderViewText web_lookup;
   ReaderViewText translate;
   ReaderViewText more;
+  /* API 3 panel-specific labels preserve portable names and exact chrome. */
+  ReaderViewText close_navigation;
+  ReaderViewText search_input;
+  ReaderViewText clear_search;
+  ReaderViewText annotation_actions;
+  ReaderViewText annotation_filters;
+  ReaderViewText export_annotations;
+  ReaderViewText close_annotations;
+  ReaderViewText delete_bookmark;
+  ReaderViewText delete_note;
+  ReaderViewText delete_highlight;
+  ReaderViewText contents_short;
+  ReaderViewText contents_panel_title;
+  ReaderViewText find_panel_title;
+  ReaderViewText filter_annotations;
+  ReaderViewText no_contents;
+  ReaderViewText find_prompt;
+  ReaderViewText no_matches;
+  ReaderViewText no_annotations;
+  ReaderViewText no_bookmarks;
+  ReaderViewText no_highlights;
+  ReaderViewText no_notes;
+  /* Frozen Find field placeholder; distinct from the ready-status prompt. */
+  ReaderViewText find_placeholder;
 } ReaderViewLabels;
 
 typedef struct ReaderViewProjection
@@ -383,6 +446,8 @@ typedef enum ReaderViewPopupKind
   ReaderViewPopup_RightRowActions,
   ReaderViewPopup_SelectionTools,
   ReaderViewPopup_NoteEditor,
+  /* Appended in API 3 so the existing popup values remain stable. */
+  ReaderViewPopup_RightFilter,
 } ReaderViewPopupKind;
 
 typedef enum ReaderViewPanelSide
@@ -447,6 +512,28 @@ typedef struct ReaderViewState
   ReaderViewKey note_selection_key;
   UI0U64 note_source_revision;
   UI0B32 note_dirty;
+
+  /* API 3 panel focus-restoration state is appended for layout stability. */
+  UI0ID left_panel_restore_focus_id;
+  UI0ID right_panel_restore_focus_id;
+  /* API 3 popup-membership snapshot is also append-only. */
+  ReaderViewRightActionFlags right_menu_actions;
+  ReaderViewRightFilterFlags right_filter_menu_flags;
+  /*
+   * API 3 bounded prior-frame identity snapshots let projection refreshes
+   * retire vanished controls without retaining caller behavior or allocating.
+   */
+  ReaderViewKey prior_toc_row_keys[READER_VIEW_TOC_ROW_CAP];
+  UI0S32 prior_toc_row_count;
+  ReaderViewKey prior_find_row_keys[READER_VIEW_FIND_ROW_CAP];
+  UI0S32 prior_find_row_count;
+  ReaderViewKey prior_right_row_keys[READER_VIEW_RIGHT_ROW_CAP];
+  UI0S32 prior_right_row_count;
+  UI0ID prior_popup_item_ids[READER_VIEW_POPUP_ITEM_SNAPSHOT_CAP];
+  UI0S32 prior_popup_item_count;
+  ReaderViewPopupKind prior_popup_kind;
+  /* Deferred until a newly opened left-panel layout is published. */
+  ReaderViewLeftPanelMode pending_left_panel_focus;
 } ReaderViewState;
 
 typedef enum ReaderViewLayoutMode
@@ -575,6 +662,8 @@ typedef enum ReaderViewActionKind
   ReaderViewAction_DeleteNote,
   ReaderViewAction_ToggleFullscreen,
   ReaderViewAction_ToggleDistractionFree,
+  /* Explicit Cancel button: host clears its committed reader selection. */
+  ReaderViewAction_CancelNote,
 } ReaderViewActionKind;
 
 typedef struct ReaderViewAction
@@ -602,6 +691,9 @@ typedef struct ReaderViewTextBinding
   UI0ID source_id;
   ReaderViewText text;
   ReaderViewTextStyle style;
+  /* Optional byte range for host-measured in-line match highlighting. */
+  UI0U32 match_start;
+  UI0U32 match_size;
 } ReaderViewTextBinding;
 
 typedef enum ReaderViewSemanticRole
@@ -658,6 +750,24 @@ typedef enum ReaderViewSemanticControl
   ReaderViewSemanticControl_PreviousPage,
   ReaderViewSemanticControl_NextPage,
   ReaderViewSemanticControl_Progress,
+  ReaderViewSemanticControl_LeftContentsTab,
+  ReaderViewSemanticControl_LeftFindTab,
+  ReaderViewSemanticControl_LeftPanelClose,
+  ReaderViewSemanticControl_TocRow,
+  ReaderViewSemanticControl_FindInput,
+  ReaderViewSemanticControl_FindClear,
+  ReaderViewSemanticControl_FindRow,
+  ReaderViewSemanticControl_RightFilter,
+  ReaderViewSemanticControl_RightExport,
+  ReaderViewSemanticControl_RightPanelClose,
+  ReaderViewSemanticControl_RightFilterOption,
+  ReaderViewSemanticControl_RightRow,
+  ReaderViewSemanticControl_RightRowStar,
+  ReaderViewSemanticControl_RightRowMenu,
+  ReaderViewSemanticControl_RightActionGoTo,
+  ReaderViewSemanticControl_RightActionToggleStar,
+  ReaderViewSemanticControl_RightActionEditNote,
+  ReaderViewSemanticControl_RightActionDelete,
 } ReaderViewSemanticControl;
 
 typedef struct ReaderViewSemanticNode
@@ -692,6 +802,7 @@ enum
   ReaderViewFrameError_InvalidFilter      = 1u << 9,
   ReaderViewFrameError_InvalidChoice      = 1u << 10,
   ReaderViewFrameError_InvalidProgress    = 1u << 11,
+  ReaderViewFrameError_InvalidAttachment  = 1u << 12,
 };
 
 typedef UI0U32 ReaderViewFrameChangeFlags;
@@ -722,6 +833,10 @@ typedef struct ReaderViewFrameStorage
   ReaderViewTextBinding text_bindings[READER_VIEW_TEXT_BINDING_CAP];
   ReaderViewSemanticNode semantic_nodes[READER_VIEW_SEMANTIC_NODE_CAP];
   ReaderViewAction actions[READER_VIEW_ACTION_CAP];
+  /* API 3 recovery storage is append-only after every earlier field. */
+  char right_filter_labels[4][READER_VIEW_RIGHT_FILTER_LABEL_CAP];
+  UI0SidenavRecord
+    reference_sidenav_records[READER_VIEW_REFERENCE_SIDENAV_RECORD_CAP];
 } ReaderViewFrameStorage;
 
 typedef struct ReaderViewBuildInput
@@ -732,6 +847,7 @@ typedef struct ReaderViewBuildInput
   const ReaderViewProjection *projection;
   const ReaderViewInput *input;
   const UI0ResolvedTheme *theme;
+  ReaderViewFindTextMetrics find_text_metrics;
 } ReaderViewBuildInput;
 
 typedef struct ReaderViewFrame
@@ -791,5 +907,8 @@ UI0B32 reader_view_accessibility_invoke(ReaderViewState *state,
 UI0B32 reader_view_open_note_editor(
   ReaderViewState *state,
   const ReaderViewSelectionProjection *selection);
+
+/* Host acknowledgement after a successful Save/Delete note action. */
+UI0B32 reader_view_close_note_editor(ReaderViewState *state);
 
 #endif /* READERVIEW0_READER_VIEW_H */
