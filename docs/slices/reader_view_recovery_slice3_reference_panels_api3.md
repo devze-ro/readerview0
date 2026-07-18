@@ -152,8 +152,9 @@ labels are `All (1)`, `All Highlight Colors (0)`, `Notes (0)`, and
 `(1086,106,3,17)`. Option text uses the frozen ten-pixel horizontal padding;
 the first text rect is `(1106,100,254,29)`. The filter trigger retains its
 14 by 14 Select icon at `(1083,71)`. Escape is keyboard input, so it restores
-the trigger with a Focus-colored border and visible focus; its clipped ring is the full
-`(1078,66,24,24)` trigger perimeter.
+the trigger with visible focus, a normal Border-colored shell, and one clipped
+Focus ring over the full `(1078,66,24,24)` perimeter. Active and open trigger
+states retain the Focus-colored border; focus alone does not double it.
 
 ## TOC behavior
 
@@ -209,8 +210,9 @@ The localized `Search in book` placeholder is
 field-only, remains visible beside a focused empty-field caret, and stays
 distinct from the localized ready-status prompt. Caret draws use the frozen
 deterministic 30-visible/30-hidden phase derived from
-`ReaderViewBuildInput.frame_index` and a centered 20 px height while the text
-and selection records remain 16 px high. The
+`ReaderViewBuildInput.frame_index` and a centered 20 px height. The caret draw
+clips to the full `(104,104,274,34)` input field; text and selection records
+retain their 16 px geometry and existing clips. The
 clear action still returns focus to the input and emits the same single empty
 `FindChanged` action. A ready status message occupies the frozen
 `(104,146,308,18)` muted Body line and is emitted exactly once. When a ready
@@ -442,7 +444,8 @@ Strict MSVC C11 `/W4 /WX` validation covers:
   placeholder, focused caret/selection draws, pointer caret placement,
   caller-measured variable-width prefixes, deterministic caller fallback,
   missing/duplicate/negative/oversized metric rejection,
-  exact 20 px visible/hidden caret-blink boundaries,
+  exact 20 px visible/hidden caret-blink boundaries with the full 274 by 34
+  field clip and non-Find caret isolation,
   physical clear-button precedence/focus restoration, single ready status,
   exact prompt/zero-match fallback copy and geometry, muted
   right-aligned section metadata, exact borrowed match range, one-action result
@@ -456,7 +459,8 @@ Strict MSVC C11 `/W4 /WX` validation covers:
   right-edge ownership, unchanged full-row accessibility invocation, all three exact
   kind-specific action matrices, anchored and bottom-flipped popup geometry,
   pointer/keyboard focus entry, native names, four exact filter-specific empty
-  states, filter selection and Escape restoration, dynamic-membership closure,
+  states, exact active/open Focus border, normal Escape/settled-focus border,
+  single clipped Focus ring, preserved Bookmarks selection, dynamic-membership closure,
   scroll reset, and bounded popup containment;
 - close-before-action and trigger-focus restoration for every applicable
   Go To/Add-Remove Star/Edit Note/kind-specific Delete path, including direct

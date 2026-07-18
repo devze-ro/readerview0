@@ -184,8 +184,9 @@ the record with a fixed byte width. The localized
 `Type and press Enter` ready-status prompt. It remains visible beside the
 focused empty-field caret, which uses the frozen deterministic
 20 px centered field geometry and 30-visible/30-hidden
-`ReaderViewBuildInput.frame_index` cycle. The text and selection rectangles
-remain 16 px high. A selected result retains the
+`ReaderViewBuildInput.frame_index` cycle. Its draw clip is the full 274 by 34
+input field so the 20 px caret is not truncated to the 16 px text rectangle;
+text and selection records keep their existing clips. A selected result retains the
 88 px action row but insets its painted fill by 4 px vertically. Ready Find
 status uses the frozen muted Body line. When a ready zero-row projection omits
 its explicit message, shared bounded query state selects the localized
@@ -222,9 +223,10 @@ a disabled Menu owns its right-edge region without selecting the row. Keyboard
 and native-accessibility row activation continue through the full semantic
 identity. The shell-free star
 raster preblends against `SurfaceElevated` while unstarred and `Badge` while
-starred. An enabled filter trigger with open, focused, focus-visible, or active
-state uses the Focus border color; its separate clipped focus ring remains
-published. The Annotations title and
+starred. An enabled filter trigger uses the Focus border color only while open
+or active. Focused and focus-visible states retain the normal Border color;
+focus-visible publishes the separate clipped Focus ring once, avoiding doubled
+rounded-corner compositing. The Annotations title and
 20 px section heading, like the visible Find-input text, each have one exact
 shared text draw and binding. Hosts own translation of those records through
 their concrete system-UI renderer, so glyph-raster differences are host adapter

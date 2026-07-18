@@ -905,6 +905,7 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   const UI0DrawCommand *border;
   const UI0DrawCommand *icon;
   const UI0DrawCommand *indicator;
+  const UI0DrawCommand *caret;
   const UI0ControlRecord *control;
   const UI0SignalRecord *row_signal;
   const UI0SignalRecord *star_signal;
@@ -1309,6 +1310,8 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
     &frame, ReaderViewSemanticControl_FindInput, 0);
   find_input_id = node ? node->id : 0;
   input_record = storage.text_input_records;
+  caret = node ? find_draw_for_source(&frame, UI0DrawOp_TextCaret,
+                                       node->id) : 0;
   check(node != 0 && rect_equal(node->rect, ui0_rect(104, 104, 308, 34)) &&
         text_equal(node->name, "Search input") && node->value.size == 0 &&
         state.focus_id == node->id && !state.focus_visible,
@@ -1329,9 +1332,12 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
         count_draw_op_for_source(&frame, UI0DrawOp_ControlBorder,
                                  find_input_id) == 1 &&
         count_draw_op_for_source(&frame, UI0DrawOp_TextCaret,
-                                 find_input_id) == 1,
+                                 find_input_id) == 1 &&
+        caret != 0 &&
+        rect_equal(caret->rect, ui0_rect(112, 111, 1, 20)) &&
+        rect_equal(caret->clip_rect, ui0_rect(104, 104, 274, 34)),
         "Find uses one real focused UI0 text-input record at the exact "
-        "274px frozen field");
+        "274px frozen field and gives its 20px caret the full-field clip");
   binding = node ? find_text_binding(&frame, node->id) : 0;
   command = node ? find_draw_for_source(&frame, UI0DrawOp_Text,
                                         node->id) : 0;
@@ -2304,11 +2310,16 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
         state.restore_focus_id == 0 && filter &&
         state.focus_id == filter->id && state.focus_visible &&
         (filter->flags & ReaderViewSemantic_Focused) != 0 && command != 0 &&
-        border && border->color == theme->colors[UI0ColorRole_Focus] &&
+        command->color == theme->colors[UI0ColorRole_Focus] &&
+        border && border->color == theme->colors[UI0ColorRole_Border] &&
+        (border->flags &
+         (UI0DrawFlag_Focused | UI0DrawFlag_FocusVisible)) ==
+          (UI0DrawFlag_Focused | UI0DrawFlag_FocusVisible) &&
+        (border->flags & (UI0DrawFlag_Open | UI0DrawFlag_Active)) == 0 &&
         rect_equal(command->rect, ui0_rect(1078, 66, 24, 24)) &&
         rect_equal(command->clip_rect, ui0_rect(1078, 66, 24, 24)),
-        "Filter Escape closes and restores the exact visibly focused "
-        "trigger ring");
+        "Filter Escape restores one Focus ring over the normal trigger "
+        "border without double Focus compositing");
 
   state.left_panel = ReaderViewLeftPanel_Contents;
   state.right_panel_open = 1;
@@ -2344,6 +2355,17 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
     build_input.frame_index += 1;
     check(reader_view_build(&build_input, &storage, &frame),
           "Filter reopen press builds");
+    filter = find_semantic_control_source(
+      &frame, ReaderViewSemanticControl_RightFilter,
+      ReaderViewRightFilter_All);
+    border = filter ? find_draw_for_source(
+      &frame, UI0DrawOp_ControlBorder, filter->id) : 0;
+    check(filter != 0 && border != 0 &&
+          (border->flags & UI0DrawFlag_Active) != 0 &&
+          (border->flags & UI0DrawFlag_Open) == 0 &&
+          border->color == theme->colors[UI0ColorRole_Focus],
+          "active filter trigger retains its exact Focus border without an "
+          "open-state substitution");
     frame_input.ui = ui0_input_pointer(rect.x + rect.w / 2,
                                        rect.y + rect.h / 2,
                                        0, 0, 1);
@@ -2355,6 +2377,16 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   build_input.frame_index += 1;
   check(reader_view_build(&build_input, &storage, &frame),
         "Filter reopened popup builds");
+  filter = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilter,
+    ReaderViewRightFilter_All);
+  border = filter ? find_draw_for_source(
+    &frame, UI0DrawOp_ControlBorder, filter->id) : 0;
+  check(filter != 0 && border != 0 &&
+        (border->flags & UI0DrawFlag_Open) != 0 &&
+        border->color == theme->colors[UI0ColorRole_Focus],
+        "open filter trigger retains its exact Focus border while the popup "
+        "owns interaction");
   option = find_semantic_control_source(
     &frame, ReaderViewSemanticControl_RightFilterOption,
     ReaderViewRightFilter_Bookmarks);
@@ -2385,8 +2417,10 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
         state.right_filter == ReaderViewRightFilter_Bookmarks &&
         state.right_scroll_y == 0 && state.popup == ReaderViewPopup_None &&
         filter && state.focus_id == filter->id && border &&
+        (border->flags & UI0DrawFlag_Open) != 0 &&
         border->color == theme->colors[UI0ColorRole_Focus],
-        "Bookmarks filter selection emits one bounded action and closes");
+        "Bookmarks filter selection emits one bounded action and preserves "
+        "the closing frame's exact open-trigger draw state");
   memset(&frame_input, 0, sizeof(frame_input));
   build_input.frame_index += 1;
   check(reader_view_build(&build_input, &storage, &frame),
@@ -2396,9 +2430,17 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
     ReaderViewRightFilter_Bookmarks);
   border = filter ? find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
                                           filter->id) : 0;
-  check(filter && state.focus_id == filter->id && border &&
-        border->color == theme->colors[UI0ColorRole_Focus],
-        "settled Bookmarks trigger retains the frozen focused border");
+  command = filter ? find_draw_for_source(&frame, UI0DrawOp_FocusRing,
+                                           filter->id) : 0;
+  check(filter && state.focus_id == filter->id &&
+        state.right_filter == ReaderViewRightFilter_Bookmarks && border &&
+        (border->flags & UI0DrawFlag_Focused) != 0 &&
+        (border->flags &
+         (UI0DrawFlag_Open | UI0DrawFlag_Active |
+          UI0DrawFlag_FocusVisible)) == 0 &&
+        border->color == theme->colors[UI0ColorRole_Border] && command == 0,
+        "settled Bookmarks trigger retains its exact filter/focus state with "
+        "the normal border and no invisible Focus overpaint");
 
   projection.right.available_filters = ReaderViewRightFilterFlag_All;
   state.popup = ReaderViewPopup_RightFilter;
@@ -3803,11 +3845,14 @@ test_frozen_note_editor_composition(const UI0ResolvedTheme *theme)
         row_draw->typography_line_height == 18 &&
         caret_draw &&
         rect_equal(caret_draw->rect, ui0_rect(489, 181, 1, 23)) &&
+        rect_equal(caret_draw->clip_rect,
+                   ui0_rect(325, 180, 476, 228)) &&
         caret_draw->color == theme->colors[UI0ColorRole_Focus] &&
         count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
                                  editor ? editor->id : 0) == 1,
         "note body restores proportional 18px system-UI text, 25px rows, "
-        "and the frozen 23px caret through explicit caller metadata");
+        "and the frozen 23px caret through explicit caller metadata without "
+        "the Find-only full-field clip patch");
 
   check(delete_note &&
         rect_equal(delete_note->rect, ui0_rect(317, 431, 74, 30)) &&

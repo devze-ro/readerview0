@@ -5545,8 +5545,6 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
         command.op == UI0DrawOp_ControlBorder &&
         (command.flags & UI0DrawFlag_Disabled) == 0 &&
         (command.flags & (UI0DrawFlag_Open |
-                          UI0DrawFlag_Focused |
-                          UI0DrawFlag_FocusVisible |
                           UI0DrawFlag_Active)) != 0)
     {
       command.color = ctx->input->theme->colors[UI0ColorRole_Focus];
@@ -5599,6 +5597,38 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
     ctx->draw.commands[write_index++] = command;
   }
   ctx->draw.command_count = write_index;
+}
+
+static void
+rv_restore_find_caret_clip(RVBuildContext *ctx, UI0S32 draw_start)
+{
+  UI0ID find_input_id = rv_id(220, 0);
+  UI0Rect field_clip = rv_rect(0, 0, 0, 0);
+  UI0S32 record_index;
+  UI0S32 draw_index;
+  if (!ctx || draw_start < 0 || draw_start > ctx->draw.command_count) return;
+  for (record_index = 0;
+       record_index < ctx->text_inputs.record_count;
+       ++record_index)
+  {
+    const UI0TextInputRecord *record =
+      ctx->text_inputs.records + record_index;
+    if (record->id == find_input_id)
+    {
+      field_clip = record->clip_rect;
+      break;
+    }
+  }
+  if (field_clip.w <= 0 || field_clip.h <= 0) return;
+  for (draw_index = draw_start;
+       draw_index < ctx->draw.command_count;
+       ++draw_index)
+  {
+    UI0DrawCommand *command = ctx->draw.commands + draw_index;
+    if (command->source_id == find_input_id &&
+        command->op == UI0DrawOp_TextCaret)
+      command->clip_rect = field_clip;
+  }
 }
 
 static void
@@ -7410,9 +7440,13 @@ reader_view_build(const ReaderViewBuildInput *input,
   rv_filter_reference_chrome_draws(&ctx);
   ui0_draw_set_text_caret_visible(
     &ctx.draw, rv_text_caret_is_visible(input->frame_index));
-  (void)ui0_text_input_draw_records(&ctx.draw,
-                                    storage->text_input_records,
-                                    ctx.text_inputs.record_count);
+  {
+    UI0S32 text_input_draw_start = ctx.draw.command_count;
+    (void)ui0_text_input_draw_records(&ctx.draw,
+                                      storage->text_input_records,
+                                      ctx.text_inputs.record_count);
+    rv_restore_find_caret_clip(&ctx, text_input_draw_start);
+  }
   (void)ui0_sidenav_draw_records(&ctx.draw, &ctx.sidenav_visuals);
   (void)ui0_scroll_draw_records(&ctx.draw, &ctx.scrolls);
   (void)ui0_draw_controls(

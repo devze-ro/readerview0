@@ -44,7 +44,9 @@ selection, clipped text, and blinking-caret draw records. Its localized
 `Type and press Enter` ready-status prompt and remains painted beside the
 caret while the focused field is empty. The caret follows the frozen
 20 px centered field geometry and frame-indexed 30-visible/30-hidden blink
-cycle; its 16 px text/selection rectangle remains unchanged. A host advertising Find also
+cycle, and its draw command clips to the full 274 by 34 field rather than the
+16 px text rectangle. Text and selection clipping remain unchanged. A host
+advertising Find also
 supplies a bounded values-only codepoint-advance record from the same system-UI
 face it uses to paint the field. The shared input therefore uses real
 variable-width prefix geometry for drawing, caret placement, selection,
@@ -67,8 +69,9 @@ return mutually exclusive row, toggle, or popup outcomes, and a disabled Menu
 cannot fall through into row selection. Keyboard and native-accessibility row
 activation continue through the full semantic row. An unstarred icon preblends
 against `SurfaceElevated`; a starred icon preblends against `Badge`. A
-focused/open filter trigger paints
-its border with the resolved Focus color as well as its clipped ring. Its
+pressed or open filter trigger paints its border with the resolved Focus
+color. Focus-only and focus-visible trigger borders remain normal; visible
+focus is represented once by the separate clipped Focus ring. Its
 row-action popup is anchored to the exact row menu, flips
 at the panel edge, and exposes the frozen Bookmark, Note, or Highlight action
 matrix. Every kind retains its inline star; only Highlight carries Star in the
