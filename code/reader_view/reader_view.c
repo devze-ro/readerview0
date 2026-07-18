@@ -45,6 +45,7 @@ enum
   RV_RIGHT_FILTER_ROW_GAP = 3,
   RV_RIGHT_FILTER_TEXT_PADDING_X = 10,
   RV_RIGHT_FILTER_ICON_SIZE = 14,
+  RV_FIND_CARET_HEIGHT = 20,
   RV_RIGHT_TEXT_LINE_HEIGHT = 20,
   RV_RIGHT_TEXT_STACK_GAP = 6,
   RV_RIGHT_TEXT_BASELINE_OFFSET = 4,
@@ -52,7 +53,10 @@ enum
   RV_NOTE_WIDTH = 520,
   RV_NOTE_HEIGHT = 360,
   RV_NOTE_ANCHOR_GAP = 12,
-  RV_NOTE_TEXT_ADVANCE = 8,
+  RV_NOTE_TEXT_PADDING_X = 8,
+  RV_NOTE_TEXT_PADDING_TOP = 13,
+  RV_NOTE_TEXT_PADDING_BOTTOM = 7,
+  RV_NOTE_TEXT_LAYOUT_PADDING_Y = 10,
   RV_NOTE_TEXT_ROW_ID_BASE = 4096,
   RV_TOOLBAR_CONTROL_WIDTH = 30,
   RV_TOOLBAR_CONTROL_HEIGHT = 28,
@@ -464,6 +468,18 @@ rv_text_caret_is_visible(UI0U64 frame_index)
   if (frame_index == 0 || visible == 0 || period == 0) return 1;
   phase = (frame_index - 1) % period;
   return phase < visible;
+}
+
+static void
+rv_apply_reference_find_caret_height(UI0TextInputRecord *record)
+{
+  UI0S32 height;
+  if (!record || record->rect.h <= 0 ||
+      record->caret_rect.w <= 0 || record->caret_rect.h <= 0)
+    return;
+  height = rv_min(RV_FIND_CARET_HEIGHT, record->rect.h);
+  record->caret_rect.y = record->rect.y + (record->rect.h - height) / 2;
+  record->caret_rect.h = height;
 }
 
 /*
@@ -4033,6 +4049,10 @@ rv_add_find_input(RVBuildContext *ctx,
                           spec,
                           &buffer,
                           &state->find_input);
+  if (ctx->text_inputs.record_count > 0)
+    rv_apply_reference_find_caret_height(
+      ctx->storage->text_input_records +
+      (ctx->text_inputs.record_count - 1));
   query = reader_view_find_query(state);
   if (query.size == 0 && ctx->text_inputs.record_count > 0)
   {
@@ -4148,6 +4168,7 @@ rv_sync_cleared_find_input(RVBuildContext *ctx,
       0,
       0,
       ctx->text_inputs.style.caret_width);
+    rv_apply_reference_find_caret_height(record);
   }
   rv_set_control_visual_text(ctx, input_id, placeholder);
   rv_set_semantic_value(ctx, input_id, reader_view_find_query(state));
@@ -5466,7 +5487,10 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
           ctx->input->theme->colors[UI0ColorRole_Focus] :
           ctx->input->theme->colors[UI0ColorRole_TextMuted];
       command.stroke_color =
-        ctx->input->theme->colors[UI0ColorRole_Badge];
+        (star_row->flags & ReaderViewRow_Starred) != 0 ?
+          ctx->input->theme->colors[UI0ColorRole_Badge] :
+          ctx->input->theme->colors[UI0ColorRole_SurfaceElevated];
+      /* The icon raster preblends against the visible row/star fill. */
     }
     if ((command.source_id == previous_id ||
          command.source_id == next_id) &&
@@ -5492,6 +5516,16 @@ rv_filter_reference_chrome_draws(RVBuildContext *ctx)
       command.stroke_width = rv_max(command.stroke_width, 1);
       command.flags |= UI0DrawFlag_RadiusExplicit;
       command.corner_radius = 4;
+    }
+    if (command.source_id == right_filter_id &&
+        command.op == UI0DrawOp_ControlBorder &&
+        (command.flags & UI0DrawFlag_Disabled) == 0 &&
+        (command.flags & (UI0DrawFlag_Open |
+                          UI0DrawFlag_Focused |
+                          UI0DrawFlag_FocusVisible |
+                          UI0DrawFlag_Active)) != 0)
+    {
+      command.color = ctx->input->theme->colors[UI0ColorRole_Focus];
     }
     if (command.source_id == right_filter_id &&
         command.op == UI0DrawOp_FocusRing)
@@ -5561,6 +5595,8 @@ rv_build_note_editor(RVBuildContext *ctx,
   UI0Rect save_rect;
   UI0S32 box_index;
   UI0S32 row_index;
+  UI0S32 saved_pointer_y;
+  UI0B32 pointer_y_mapped;
   UI0B32 matching;
   UI0B32 editing;
   UI0B32 delete_invoked;
@@ -5644,12 +5680,135 @@ rv_build_note_editor(RVBuildContext *ctx,
   text_spec.frame_input = ctx->input->input->note_text;
   ctx->text_areas.style.wrap_width = rv_max(
     editor_rect.w - ctx->text_areas.style.padding_x * 2, 8);
+  saved_pointer_y = ctx->signals.input.pointer_y;
+  pointer_y_mapped =
+    ctx->signals.input.pointer_x >= editor_rect.x + RV_NOTE_TEXT_PADDING_X &&
+    ctx->signals.input.pointer_x <
+      editor_rect.x + editor_rect.w - RV_NOTE_TEXT_PADDING_X &&
+    saved_pointer_y >= editor_rect.y &&
+    saved_pointer_y < editor_rect.y + editor_rect.h;
+  if (pointer_y_mapped)
+  {
+    ctx->signals.input.pointer_y = rv_max(
+      editor_rect.y,
+      saved_pointer_y -
+        (RV_NOTE_TEXT_PADDING_TOP - RV_NOTE_TEXT_LAYOUT_PADDING_Y));
+  }
   text_result = ui0_text_area_edit(&ctx->text_areas,
                                    &ctx->signals,
                                    &ctx->input_layout,
                                    text_spec,
                                    &buffer,
                                    &state->note_input);
+  ctx->signals.input.pointer_y = saved_pointer_y;
+  if (ctx->text_areas.record_count > 0)
+  {
+    UI0TextAreaRecord *record =
+      ctx->text_areas.records + ctx->text_areas.record_count - 1;
+    UI0S32 line_height = ctx->input->note_text_metrics.line_height;
+    UI0S32 visible_row_cap = rv_max(
+      (editor_rect.h - RV_NOTE_TEXT_PADDING_TOP -
+       RV_NOTE_TEXT_PADDING_BOTTOM) / line_height,
+      1);
+    UI0S32 maximum_scroll = rv_max(
+      ((record->content_h + line_height - 1) / line_height -
+       visible_row_cap) * line_height,
+      0);
+    UI0S32 quantized_scroll = record->scroll_y <= 0 ? 0 :
+      ((record->scroll_y + line_height / 2) / line_height) * line_height;
+    UI0S32 geometry_delta;
+    UI0S32 original_row_count;
+    UI0S32 record_row_index;
+    UI0S32 row_write_count;
+    UI0S32 row_visual_bottom;
+    UI0S32 original_selection_count;
+    UI0S32 selection_write_count;
+    UI0S32 selection_index;
+    quantized_scroll = rv_clamp(quantized_scroll, 0, maximum_scroll);
+    geometry_delta =
+      RV_NOTE_TEXT_PADDING_TOP - RV_NOTE_TEXT_LAYOUT_PADDING_Y -
+      (quantized_scroll - record->scroll_y);
+    state->note_input.scroll_y = quantized_scroll;
+    record->rect = editor_rect;
+    record->clip_rect = editor_rect;
+    record->text_rect = rv_rect(
+      editor_rect.x + RV_NOTE_TEXT_PADDING_X,
+      editor_rect.y + RV_NOTE_TEXT_PADDING_TOP,
+      rv_max(editor_rect.w - RV_NOTE_TEXT_PADDING_X * 2, 1),
+      rv_max(editor_rect.h - RV_NOTE_TEXT_PADDING_TOP -
+             RV_NOTE_TEXT_PADDING_BOTTOM, 1));
+    record->scroll_y = quantized_scroll;
+    record->scroll_record.scroll_y = quantized_scroll;
+    record->scroll_record.max_scroll_y = maximum_scroll;
+    original_row_count = record->row_count;
+    row_write_count = 0;
+    row_visual_bottom = record->text_rect.y + visible_row_cap * line_height;
+    for (record_row_index = 0;
+         record_row_index < original_row_count;
+         ++record_row_index)
+    {
+      UI0S32 read_index = record->row_start + record_row_index;
+      UI0S32 write_index = record->row_start + row_write_count;
+      UI0TextAreaRowRecord row_record;
+      if (read_index < 0 ||
+          read_index >= ctx->text_areas.row_record_count)
+        break;
+      row_record = ctx->text_areas.row_records[read_index];
+      row_record.rect.y += geometry_delta;
+      if (row_record.rect.y < record->text_rect.y ||
+          row_record.rect.y >= row_visual_bottom ||
+          row_write_count >= visible_row_cap)
+        continue;
+      ctx->text_areas.row_records[write_index] = row_record;
+      row_write_count += 1;
+    }
+    record->row_count = row_write_count;
+    record->visible_row_count = row_write_count;
+    original_selection_count = record->selection_count;
+    selection_write_count = 0;
+    for (selection_index = 0;
+         selection_index < original_selection_count;
+         ++selection_index)
+    {
+      UI0S32 read_index =
+        record->selection_start_record + selection_index;
+      UI0S32 write_index =
+        record->selection_start_record + selection_write_count;
+      UI0TextAreaSelectionRecord *selection_record;
+      UI0TextAreaSelectionRecord adjusted;
+      if (read_index < 0 ||
+          read_index >= ctx->text_areas.selection_record_count)
+        break;
+      adjusted = ctx->text_areas.selection_records[read_index];
+      adjusted.rect.y += geometry_delta + 1;
+      adjusted.rect.h = rv_max(line_height - 2, 1);
+      if (adjusted.rect.y < record->text_rect.y + 1 ||
+          adjusted.rect.y >= row_visual_bottom)
+        continue;
+      selection_record = ctx->text_areas.selection_records + write_index;
+      *selection_record = adjusted;
+      selection_record->rect = ui0_rect_intersect(
+        selection_record->rect, record->text_rect);
+      selection_write_count += 1;
+    }
+    record->selection_count = selection_write_count;
+    if (record->caret_rect.w > 0 && record->caret_rect.h > 0)
+    {
+      record->caret_rect.y += geometry_delta + 1;
+      record->caret_rect.h = rv_max(line_height - 2, 1);
+      record->caret_rect = ui0_rect_intersect(record->caret_rect,
+                                               record->text_rect);
+    }
+    if (state->note_draft_length == 0)
+    {
+      record->state |= UI0TextAreaState_PlaceholderVisible;
+      record->placeholder_rect = rv_rect(
+        editor_rect.x + RV_NOTE_TEXT_PADDING_X,
+        editor_rect.y + RV_NOTE_TEXT_PADDING_BOTTOM,
+        rv_max(editor_rect.w - RV_NOTE_TEXT_PADDING_X * 2, 1),
+        rv_max(editor_rect.h - RV_NOTE_TEXT_PADDING_BOTTOM * 2, 1));
+    }
+  }
   if (text_result.edited)
   {
     state->note_dirty = 1;
@@ -5669,20 +5828,23 @@ rv_build_note_editor(RVBuildContext *ctx,
     editor_rect, labels.note_text, reader_view_note_draft(state),
     state->note_selection_key, 0, 0, 0);
   (void)rv_add_binding(ctx, editor_id, labels.note_placeholder,
-                       ReaderViewTextStyle_Default);
+                       ReaderViewTextStyle_NoteEditor);
   for (row_index = 0;
-       row_index < ctx->text_areas.row_record_count;
+       ctx->text_areas.record_count > 0 &&
+       row_index < ctx->text_areas.records[0].row_count;
        ++row_index)
   {
+    UI0S32 storage_row_index =
+      ctx->text_areas.records[0].row_start + row_index;
     const UI0TextAreaRowRecord *row =
-      ctx->text_areas.row_records + row_index;
+      ctx->text_areas.row_records + storage_row_index;
     UI0S32 start = rv_clamp(row->byte_start, 0, state->note_draft_length);
     UI0S32 end = rv_clamp(row->byte_end, start, state->note_draft_length);
     (void)rv_add_binding(
-      ctx, rv_id(RV_NOTE_TEXT_ROW_ID_BASE + (UI0U64)row_index,
+      ctx, rv_id(RV_NOTE_TEXT_ROW_ID_BASE + (UI0U64)storage_row_index,
                  state->note_selection_key),
       rv_text(state->note_draft + start, end - start),
-      ReaderViewTextStyle_Default);
+      ReaderViewTextStyle_NoteEditor);
   }
 
   delete_invoked = 0;
@@ -6719,6 +6881,18 @@ rv_find_codepoint_advance(const ReaderViewFindTextMetrics *metrics,
 }
 
 static UI0S32
+rv_note_codepoint_advance(const ReaderViewNoteTextMetrics *metrics,
+                          UI0U32 codepoint)
+{
+  UI0S32 index;
+  if (!metrics) return 0;
+  for (index = 0; index < metrics->advance_count; ++index)
+    if (metrics->advances[index].codepoint == codepoint)
+      return metrics->advances[index].advance;
+  return metrics->fallback_advance;
+}
+
+static UI0S32
 rv_find_text_measure(void *user_data,
                      const char *text,
                      UI0S32 byte_count)
@@ -6750,15 +6924,76 @@ rv_find_text_measure(void *user_data,
   return rv_max(max_width, current_width);
 }
 
+static UI0S32
+rv_note_text_measure(void *user_data,
+                     const char *text,
+                     UI0S32 byte_count)
+{
+  const ReaderViewNoteTextMetrics *metrics =
+    (const ReaderViewNoteTextMetrics *)user_data;
+  UI0S32 index = 0;
+  UI0S32 current_width = 0;
+  UI0S32 max_width = 0;
+  if (!metrics || !text || byte_count <= 0) return 0;
+  while (index < byte_count)
+  {
+    UI0S32 size;
+    UI0U32 codepoint = rv_find_text_codepoint(text, byte_count, index, &size);
+    UI0S32 advance;
+    if (size <= 0) break;
+    index += size;
+    if (codepoint == (UI0U32)'\r') continue;
+    if (codepoint == (UI0U32)'\n')
+    {
+      max_width = rv_max(max_width, current_width);
+      current_width = 0;
+      continue;
+    }
+    advance = rv_note_codepoint_advance(metrics, codepoint);
+    current_width = current_width > 0x7fffffff - advance ?
+      0x7fffffff : current_width + advance;
+  }
+  return rv_max(max_width, current_width);
+}
+
+static UI0B32
+rv_codepoint_metrics_valid(const ReaderViewCodepointAdvance *advances,
+                           UI0S32 advance_count,
+                           UI0S32 fallback_advance,
+                           UI0S32 cap,
+                           UI0B32 required,
+                           UI0B32 present)
+{
+  UI0S32 index;
+  UI0S32 earlier;
+  if (((required || present) &&
+       (fallback_advance <= 0 || fallback_advance > 0x100000)) ||
+      advance_count < 0 || advance_count > cap ||
+      (advance_count > 0 && !advances))
+    return 0;
+  for (index = 0; index < advance_count; ++index)
+  {
+    const ReaderViewCodepointAdvance *item = advances + index;
+    if (item->codepoint == 0 || item->codepoint > 0x10ffffu ||
+        (item->codepoint >= 0xd800u && item->codepoint <= 0xdfffu) ||
+        item->advance < 0 || item->advance > 0x100000)
+      return 0;
+    for (earlier = 0; earlier < index; ++earlier)
+      if (advances[earlier].codepoint == item->codepoint)
+        return 0;
+  }
+  return 1;
+}
+
 static UI0B32
 rv_build_input_valid(const ReaderViewBuildInput *input,
                      ReaderViewFrameStorage *storage,
                      ReaderViewFrame *out_frame)
 {
-  UI0S32 index;
-  UI0S32 earlier;
   UI0B32 metrics_required;
   UI0B32 metrics_present;
+  UI0B32 note_metrics_required;
+  UI0B32 note_metrics_present;
   if (!input || !storage || !out_frame || !input->state || !input->layout ||
       !input->projection || !input->input || !input->theme)
     return 0;
@@ -6767,33 +7002,34 @@ rv_build_input_valid(const ReaderViewBuildInput *input,
   metrics_present = input->find_text_metrics.advances != 0 ||
     input->find_text_metrics.advance_count != 0 ||
     input->find_text_metrics.fallback_advance != 0;
-  if ((metrics_required &&
-       (input->find_text_metrics.fallback_advance <= 0 ||
-        input->find_text_metrics.fallback_advance > 0x100000)) ||
-      (!metrics_required && metrics_present &&
-       (input->find_text_metrics.fallback_advance <= 0 ||
-        input->find_text_metrics.fallback_advance > 0x100000)) ||
-      input->find_text_metrics.advance_count < 0 ||
-      input->find_text_metrics.advance_count >
-        READER_VIEW_FIND_CODEPOINT_ADVANCE_CAP ||
-      (input->find_text_metrics.advance_count > 0 &&
-       !input->find_text_metrics.advances))
+  if (!rv_codepoint_metrics_valid(
+        input->find_text_metrics.advances,
+        input->find_text_metrics.advance_count,
+        input->find_text_metrics.fallback_advance,
+        READER_VIEW_FIND_CODEPOINT_ADVANCE_CAP,
+        metrics_required,
+        metrics_present))
     return 0;
-  for (index = 0;
-       index < input->find_text_metrics.advance_count;
-       ++index)
-  {
-    const ReaderViewCodepointAdvance *item =
-      input->find_text_metrics.advances + index;
-    if (item->codepoint == 0 || item->codepoint > 0x10ffffu ||
-        (item->codepoint >= 0xd800u && item->codepoint <= 0xdfffu) ||
-        item->advance < 0 || item->advance > 0x100000)
-      return 0;
-    for (earlier = 0; earlier < index; ++earlier)
-      if (input->find_text_metrics.advances[earlier].codepoint ==
-          item->codepoint)
-        return 0;
-  }
+  note_metrics_required = input->state->popup == ReaderViewPopup_NoteEditor;
+  note_metrics_present = input->note_text_metrics.advances != 0 ||
+    input->note_text_metrics.advance_count != 0 ||
+    input->note_text_metrics.fallback_advance != 0 ||
+    input->note_text_metrics.pixel_height != 0 ||
+    input->note_text_metrics.line_height != 0;
+  if (!rv_codepoint_metrics_valid(
+        input->note_text_metrics.advances,
+        input->note_text_metrics.advance_count,
+        input->note_text_metrics.fallback_advance,
+        READER_VIEW_NOTE_CODEPOINT_ADVANCE_CAP,
+        note_metrics_required,
+        note_metrics_present) ||
+      ((note_metrics_required || note_metrics_present) &&
+       (input->note_text_metrics.pixel_height <= 0 ||
+        input->note_text_metrics.pixel_height > 0x100000 ||
+        input->note_text_metrics.line_height <
+          input->note_text_metrics.pixel_height ||
+        input->note_text_metrics.line_height > 0x100000)))
+    return 0;
   return 1;
 }
 
@@ -6937,8 +7173,18 @@ reader_view_build(const ReaderViewBuildInput *input,
     READER_VIEW_TEXT_AREA_ROW_CAP);
   ctx.text_areas.frame_index = input->frame_index;
   ctx.text_areas.style = ui0_text_area_style_from_resolved(input->theme);
-  ctx.text_areas.style.measure =
-    ui0_text_input_fixed_measure(RV_NOTE_TEXT_ADVANCE);
+  if (input->note_text_metrics.fallback_advance > 0)
+  {
+    ctx.text_areas.style.measure.measure = rv_note_text_measure;
+    ctx.text_areas.style.measure.user_data =
+      (void *)(const void *)&input->note_text_metrics;
+    ctx.text_areas.style.measure.fallback_char_width =
+      input->note_text_metrics.fallback_advance;
+    ctx.text_areas.style.padding_x = RV_NOTE_TEXT_PADDING_X;
+    ctx.text_areas.style.padding_y = RV_NOTE_TEXT_LAYOUT_PADDING_Y;
+    ctx.text_areas.style.line_height = input->note_text_metrics.line_height;
+    ctx.text_areas.style.caret_width = 1;
+  }
   if (input->find_text_metrics.fallback_advance > 0)
   {
     ctx.text_inputs.style.measure.measure = rv_find_text_measure;
@@ -7165,8 +7411,7 @@ reader_view_build(const ReaderViewBuildInput *input,
     UI0S32 text_area_draw_start = ctx.draw.command_count;
     (void)ui0_text_area_draw_records(&ctx.draw, &ctx.text_areas);
     if (ctx.text_areas.record_count > 0 &&
-        input->state->popup == ReaderViewPopup_NoteEditor &&
-        input->state->note_draft_length > 0)
+        input->state->popup == ReaderViewPopup_NoteEditor)
     {
       const UI0TextAreaRecord *record = ctx.text_areas.records;
       UI0S32 text_area_draw_index;
@@ -7176,14 +7421,28 @@ reader_view_build(const ReaderViewBuildInput *input,
       {
         UI0DrawCommand *command =
           ctx.draw.commands + text_area_draw_index;
-        if (command->source_id == record->id &&
-            command->op == UI0DrawOp_Text &&
-            command->source_index >= record->row_start &&
-            command->source_index < record->row_start + record->row_count)
+        if (command->source_id != record->id) continue;
+        if (command->op == UI0DrawOp_Text)
         {
-          command->source_id = rv_id(
-            RV_NOTE_TEXT_ROW_ID_BASE + (UI0U64)command->source_index,
-            input->state->note_selection_key);
+          if (input->state->note_draft_length > 0 &&
+              command->source_index >= record->row_start &&
+              command->source_index < record->row_start + record->row_count)
+          {
+            command->source_id = rv_id(
+              RV_NOTE_TEXT_ROW_ID_BASE + (UI0U64)command->source_index,
+              input->state->note_selection_key);
+          }
+          command->typography_role = UI0TypographyRole_Body;
+          command->has_typography_role = 1;
+          command->typography_char_width =
+            input->note_text_metrics.fallback_advance;
+          command->typography_line_height =
+            input->note_text_metrics.pixel_height;
+        }
+        else if (command->op == UI0DrawOp_TextCaret)
+        {
+          command->color =
+            input->theme->colors[UI0ColorRole_Focus];
         }
       }
     }

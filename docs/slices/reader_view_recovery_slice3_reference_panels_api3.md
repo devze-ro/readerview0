@@ -46,7 +46,9 @@ The bounded API highlights used by this slice are:
   Save, and native Cancel names;
 - `ReaderViewBuildInput` appends a values-only `ReaderViewFindTextMetrics`
   record containing at most 256 caller-measured codepoint advances and one
-  caller-measured fallback advance;
+  caller-measured fallback advance, then appends a values-only
+  `ReaderViewNoteTextMetrics` with the same bounded advance table plus pixel
+  and line height;
 - `ReaderViewState` appends the open annotation action/filter membership and
   fixed-capacity prior-frame row/popup identity snapshots after the earlier
   API 3 state fields, plus `pending_left_panel_focus` for the one-layout-frame
@@ -55,7 +57,8 @@ The bounded API highlights used by this slice are:
   `ReaderViewSemanticControl` identities, and
   `ReaderViewFrameError_InvalidAttachment` are append-only enum/flag values;
 - `ReaderViewTextBinding` appends `match_start` and `match_size` for a validated
-  borrowed Find match range;
+  borrowed Find match range, and `ReaderViewTextStyle_NoteEditor` is appended
+  after every earlier binding style;
 - `ReaderViewAction_CancelNote` is appended after every earlier API 3 action
   identity; and
 - `reader_view_close_note_editor` gives a host an explicit acknowledgement
@@ -125,8 +128,9 @@ The title begins at x 1156. The row's text begins at x 1091. A row with both
 metadata and primary copy uses the frozen centered 46 px stack: metadata is
 `(1091,142,221,20)` and primary text is `(1091,168,221,20)` for the first
 deterministic row. The star paints as a 14 by 14 icon at `(1323,154)` without a
-button shell. Its raster background is the resolved Badge token, including the
-frozen pale-coral starred treatment. The row menu retains its standard 30 by 28
+button shell. Its raster background is `SurfaceElevated` while unstarred and
+the resolved Badge token for the frozen pale-coral starred treatment. The row
+menu retains its standard 30 by 28
 fill/border shell and centered literal ellipsis. Annotation rows use the
 elevated-surface fill while hovered or active and while their own action menu is
 open; idle, selected-only, and focus-only rows have neither fill nor border.
@@ -143,7 +147,7 @@ labels are `All (1)`, `All Highlight Colors (0)`, `Notes (0)`, and
 `(1086,106,3,17)`. Option text uses the frozen ten-pixel horizontal padding;
 the first text rect is `(1106,100,254,29)`. The filter trigger retains its
 14 by 14 Select icon at `(1083,71)`. Escape is keyboard input, so it restores
-the trigger with visible focus; its clipped ring is the full
+the trigger with a Focus-colored border and visible focus; its clipped ring is the full
 `(1078,66,24,24)` trigger perimeter.
 
 ## TOC behavior
@@ -200,7 +204,8 @@ The localized `Search in book` placeholder is
 field-only, remains visible beside a focused empty-field caret, and stays
 distinct from the localized ready-status prompt. Caret draws use the frozen
 deterministic 30-visible/30-hidden phase derived from
-`ReaderViewBuildInput.frame_index`. The
+`ReaderViewBuildInput.frame_index` and a centered 20 px height while the text
+and selection records remain 16 px high. The
 clear action still returns focus to the input and emits the same single empty
 `FindChanged` action. A ready status message occupies the frozen
 `(104,146,308,18)` muted Body line and is emitted exactly once. When a ready
@@ -341,8 +346,13 @@ case, the modal is `(303,117,520,360)`, the real multiline UI0 TextArea is
 `(317,431,74,30)`, `(675,431,62,30)`, and `(747,431,62,30)`. The title is
 `Note` for an existing note and `Add Note` for a new one. The field announces
 `Note text`, uses `Type a note` only as its visual placeholder, paints wrapped
-rows top-aligned with the frozen fixed eight-pixel UI0 layout advance, and
-retains bounded caret/selection/history behavior. Delete
+rows with caller-provided proportional system-UI advances, and retains bounded
+caret/selection/history behavior. The frozen content starts at x+8/y+13 with
+a 7 px bottom inset, exposes nine complete 25 px rows, and uses 23 px inset
+caret/selection records. Each row binding uses
+`ReaderViewTextStyle_NoteEditor`; every note Text draw carries Body role,
+18 px raster height, and the caller fallback advance. The focused empty
+placeholder keeps its separate x+8/y+7 box. Delete
 is destructive and appears only for a deletable existing note, Close/Cancel is
 quiet, and Save is primary and remains enabled for an unchanged matching
 revision. Native edit focus order is Note text, Delete note, Cancel note, Save
@@ -427,7 +437,7 @@ Strict MSVC C11 `/W4 /WX` validation covers:
   placeholder, focused caret/selection draws, pointer caret placement,
   caller-measured variable-width prefixes, deterministic caller fallback,
   missing/duplicate/negative/oversized metric rejection,
-  exact visible/hidden caret-blink boundaries,
+  exact 20 px visible/hidden caret-blink boundaries,
   physical clear-button precedence/focus restoration, single ready status,
   exact prompt/zero-match fallback copy and geometry, muted
   right-aligned section metadata, exact borrowed match range, one-action result
@@ -452,6 +462,12 @@ Strict MSVC C11 `/W4 /WX` validation covers:
 - dirty-note Escape preservation, explicit Cancel identity/action closure, and
   normalized opaque note-revision evidence, plus successful host Save/Delete
   acknowledgement through modal-state retirement and focus restoration;
+- note metric missing/duplicate/surrogate/negative/cap/fallback/pixel/line
+  validation, same-frame fallback and next-frame scalar refresh, exact
+  NoteEditor/Body/18 px carrier, +13/+7 placeholder/content geometry, nine
+  complete 25 px rows, first/last-row pointer and 23 px caret mapping,
+  nine-record selection clipping, quantized scroll, and outside-shell signal
+  identity;
 - one-build accessibility request consumption, same-frame atomic focus
   evidence, including failed-build non-replay, deferred panel focus handoff and
   Escape cancellation, popup/modal root containment, all-projected-row and

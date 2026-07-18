@@ -5,6 +5,7 @@ enum
 {
   READER_VIEW_FIND_QUERY_CAP = 128,
   READER_VIEW_FIND_CODEPOINT_ADVANCE_CAP = 256,
+  READER_VIEW_NOTE_CODEPOINT_ADVANCE_CAP = 256,
   READER_VIEW_NOTE_DRAFT_CAP = 512,
   READER_VIEW_FIND_HISTORY_EDIT_CAP = 16,
   READER_VIEW_FIND_HISTORY_TEXT_CAP = 512,
@@ -77,6 +78,21 @@ typedef struct ReaderViewFindTextMetrics
   UI0S32 advance_count;
   UI0S32 fallback_advance;
 } ReaderViewFindTextMetrics;
+
+/*
+ * The note editor uses the accepted system-UI face at a caller-owned pixel
+ * height. Advances and scalar metrics are borrowed for one build only. The
+ * boundary remains values-only: no font object, executable indirection, or
+ * native handle crosses into readerview0.
+ */
+typedef struct ReaderViewNoteTextMetrics
+{
+  const ReaderViewCodepointAdvance *advances;
+  UI0S32 advance_count;
+  UI0S32 fallback_advance;
+  UI0S32 pixel_height;
+  UI0S32 line_height;
+} ReaderViewNoteTextMetrics;
 
 typedef UI0U64 ReaderViewKey;
 
@@ -693,6 +709,7 @@ typedef enum ReaderViewTextStyle
   ReaderViewTextStyle_ChromeTitle,
   ReaderViewTextStyle_ChromeMetadata,
   ReaderViewTextStyle_MenuItem,
+  ReaderViewTextStyle_NoteEditor,
 } ReaderViewTextStyle;
 
 typedef struct ReaderViewTextBinding
@@ -864,6 +881,7 @@ typedef struct ReaderViewBuildInput
   const ReaderViewInput *input;
   const UI0ResolvedTheme *theme;
   ReaderViewFindTextMetrics find_text_metrics;
+  ReaderViewNoteTextMetrics note_text_metrics;
 } ReaderViewBuildInput;
 
 typedef struct ReaderViewFrame

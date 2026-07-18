@@ -128,6 +128,35 @@ test_find_text_width(const char *text)
   return result;
 }
 
+static UI0S32
+test_note_codepoint_advance(UI0U32 codepoint)
+{
+  if (codepoint == (UI0U32)' ') return 5;
+  if (codepoint == (UI0U32)'i') return 4;
+  if (codepoint == (UI0U32)'t') return 7;
+  if (codepoint == (UI0U32)'a') return 6;
+  return 10;
+}
+
+static ReaderViewNoteTextMetrics
+test_note_text_metrics(ReaderViewCodepointAdvance *advances)
+{
+  ReaderViewNoteTextMetrics result;
+  UI0S32 index;
+  for (index = 1; index < 128; ++index)
+  {
+    advances[index - 1].codepoint = (UI0U32)index;
+    advances[index - 1].advance =
+      test_note_codepoint_advance((UI0U32)index);
+  }
+  result.advances = advances;
+  result.advance_count = 127;
+  result.fallback_advance = 10;
+  result.pixel_height = 18;
+  result.line_height = 25;
+  return result;
+}
+
 static const ReaderViewSemanticNode *
 find_semantic_control_source(const ReaderViewFrame *frame,
                              ReaderViewSemanticControl control,
@@ -1298,7 +1327,7 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
         command->label_hash == input_record->placeholder_hash &&
         rect_equal(command->rect, ui0_rect(112, 104, 112, 34)) &&
         rect_equal(input_record->caret_rect,
-                   ui0_rect(112, 113, 1, 16)),
+                   ui0_rect(112, 111, 1, 20)),
         "Find focused empty input paints the frozen Search in book text and "
         "caret together");
   build_input.frame_index = 1051;
@@ -1426,7 +1455,7 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
         rect_equal(input_record->selection_rect,
                    ui0_rect(112, 113, 40, 16)) &&
         rect_equal(input_record->caret_rect,
-                   ui0_rect(152, 113, 1, 16)) &&
+                   ui0_rect(152, 111, 1, 20)) &&
         count_draw_op_for_source(&frame, UI0DrawOp_TextSelection,
                                  find_input_id) == 1 &&
         count_draw_op_for_source(&frame, UI0DrawOp_TextCaret,
@@ -1448,7 +1477,7 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
         (input_record->state & UI0TextInputState_Pressed) != 0 &&
         (input_record->state & UI0TextInputState_HasSelection) == 0 &&
         rect_equal(input_record->caret_rect,
-                   ui0_rect(128, 113, 1, 16)),
+                   ui0_rect(128, 111, 1, 20)),
         "Find pointer hit uses UI0 measurement to place and collapse the "
         "caret inside the 274px field");
   frame_input.ui = ui0_input_pointer(129, 121, 0, 0, 1);
@@ -1478,8 +1507,7 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
           input_record->caret == metric_len &&
           rect_equal(input_record->caret_rect,
                      ui0_rect(input_record->text_rect.x + metric_width,
-                              input_record->text_rect.y, 1,
-                              input_record->text_rect.h)) &&
+                              input_record->rect.y + 7, 1, 20)) &&
           command != 0 && command->rect.w == metric_width,
           "Find caret and draw geometry use caller-supplied variable-width "
           "system-UI advances instead of len times eight");
@@ -1500,8 +1528,7 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
           rect_equal(input_record->caret_rect,
                      ui0_rect(input_record->text_rect.x +
                                 build_input.find_text_metrics.fallback_advance,
-                              input_record->text_rect.y, 1,
-                              input_record->text_rect.h)),
+                              input_record->rect.y + 7, 1, 20)),
           "Find missing scalar deterministically uses the caller-measured "
           "fallback advance");
   }
@@ -1866,13 +1893,30 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
   check(icon != 0 && icon->icon_kind == UI0IconKind_Star &&
         rect_equal(icon->rect, ui0_rect(1323, 154, 14, 14)) &&
         icon->color == theme->colors[UI0ColorRole_TextMuted] &&
-        icon->stroke_color == theme->colors[UI0ColorRole_Badge] &&
+        icon->stroke_color ==
+          theme->colors[UI0ColorRole_SurfaceElevated] &&
         count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
                                  node ? node->id : 0) == 0 &&
         count_draw_op_for_source(&frame, UI0DrawOp_ControlBorder,
                                  node ? node->id : 0) == 0,
         "Annotations unstarred icon uses the frozen 14px raster target "
         "without a button shell");
+  right_rows[0].flags |= ReaderViewRow_Starred;
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations starred raster frame builds");
+  node = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightRowStar, 40);
+  icon = node ? find_icon_for_source(&frame, node->id) : 0;
+  check(icon && icon->color == theme->colors[UI0ColorRole_Focus] &&
+        icon->stroke_color == theme->colors[UI0ColorRole_Badge] &&
+        rect_equal(icon->rect, ui0_rect(1323, 154, 14, 14)),
+        "Annotations starred icon preblends against the frozen badge fill");
+  right_rows[0].flags &= ~ReaderViewRow_Starred;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Annotations unstarred raster state restores");
   node = find_semantic_control_source(
     &frame, ReaderViewSemanticControl_RightRowMenu, 40);
   check(node != 0 && rect_equal(node->rect, ui0_rect(1340, 147, 30, 28)) &&
@@ -2183,10 +2227,13 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
     ReaderViewRightFilter_All);
   command = filter ? find_draw_for_source(&frame, UI0DrawOp_FocusRing,
                                            filter->id) : 0;
+  border = filter ? find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
+                                          filter->id) : 0;
   check(state.popup == ReaderViewPopup_None &&
         state.restore_focus_id == 0 && filter &&
         state.focus_id == filter->id && state.focus_visible &&
         (filter->flags & ReaderViewSemantic_Focused) != 0 && command != 0 &&
+        border && border->color == theme->colors[UI0ColorRole_Focus] &&
         rect_equal(command->rect, ui0_rect(1078, 66, 24, 24)) &&
         rect_equal(command->clip_rect, ui0_rect(1078, 66, 24, 24)),
         "Filter Escape closes and restores the exact visibly focused "
@@ -2257,11 +2304,30 @@ test_reference_panels_and_disabled_gutter(const UI0ResolvedTheme *theme)
           "Bookmarks filter option release builds");
   }
   action = find_action(&frame, ReaderViewAction_RightFilterChanged);
+  filter = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilter,
+    ReaderViewRightFilter_All);
+  border = filter ? find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
+                                          filter->id) : 0;
   check(action != 0 &&
         action->right_filter == ReaderViewRightFilter_Bookmarks &&
         state.right_filter == ReaderViewRightFilter_Bookmarks &&
-        state.right_scroll_y == 0 && state.popup == ReaderViewPopup_None,
+        state.right_scroll_y == 0 && state.popup == ReaderViewPopup_None &&
+        filter && state.focus_id == filter->id && border &&
+        border->color == theme->colors[UI0ColorRole_Focus],
         "Bookmarks filter selection emits one bounded action and closes");
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "Bookmarks filter settled trigger frame builds");
+  filter = find_semantic_control_source(
+    &frame, ReaderViewSemanticControl_RightFilter,
+    ReaderViewRightFilter_Bookmarks);
+  border = filter ? find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
+                                          filter->id) : 0;
+  check(filter && state.focus_id == filter->id && border &&
+        border->color == theme->colors[UI0ColorRole_Focus],
+        "settled Bookmarks trigger retains the frozen focused border");
 
   projection.right.available_filters = ReaderViewRightFilterFlag_All;
   state.popup = ReaderViewPopup_RightFilter;
@@ -3186,6 +3252,7 @@ lifecycle_build(ReaderViewState *state,
                 UI0U64 frame_index)
 {
   ReaderViewBuildInput build_input;
+  ReaderViewCodepointAdvance note_advances[127];
   layout_input->features = projection->features;
   layout_input->document_flags = projection->document_flags;
   if (!reader_view_resolve_layout(state, layout_input, layout)) return 0;
@@ -3197,6 +3264,7 @@ lifecycle_build(ReaderViewState *state,
   build_input.input = input;
   build_input.theme = theme;
   build_input.find_text_metrics = test_find_text_metrics(advances);
+  build_input.note_text_metrics = test_note_text_metrics(note_advances);
   return reader_view_build(&build_input, storage, frame);
 }
 
@@ -3549,7 +3617,8 @@ test_frozen_note_editor_composition(const UI0ResolvedTheme *theme)
   const UI0TextAreaRecord *text_area;
   const UI0TextAreaRowRecord *text_row;
   const UI0DrawCommand *row_draw;
-  UI0U64 frame_index = 900;
+  const UI0DrawCommand *caret_draw;
+  UI0U64 frame_index = 901;
 
   memset(&layout_input, 0, sizeof(layout_input));
   layout_input.bounds = ui0_rect(0, 0, 1400, 780);
@@ -3596,20 +3665,31 @@ test_frozen_note_editor_composition(const UI0ResolvedTheme *theme)
     storage.note_text_area_row_records + text_area->row_start : 0;
   row_draw = text_row ?
     find_draw_for_rect(&frame, UI0DrawOp_Text, text_row->rect) : 0;
+  caret_draw = editor ? find_draw_for_source(
+    &frame, UI0DrawOp_TextCaret, editor->id) : 0;
   binding = row_draw ? find_text_binding(&frame, row_draw->source_id) : 0;
   check(text_area->id == (editor ? editor->id : 0) &&
         rect_equal(text_area->rect, ui0_rect(317, 167, 492, 248)) &&
-        rect_equal(text_area->text_rect, ui0_rect(325, 175, 476, 232)) &&
+        rect_equal(text_area->text_rect, ui0_rect(325, 180, 476, 228)) &&
         (text_area->state & (UI0TextAreaState_Focused |
                              UI0TextAreaState_FocusVisible)) ==
           (UI0TextAreaState_Focused | UI0TextAreaState_FocusVisible) &&
         text_area->row_count == 1 && text_row &&
-        text_row->rect.y == text_area->text_rect.y &&
+        rect_equal(text_row->rect, ui0_rect(325, 180, 164, 25)) &&
         row_draw && binding && text_equal(binding->text,
                                           "Attached parity note") &&
+        binding->style == ReaderViewTextStyle_NoteEditor &&
+        row_draw->has_typography_role &&
+        row_draw->typography_role == UI0TypographyRole_Body &&
+        row_draw->typography_char_width == 10 &&
+        row_draw->typography_line_height == 18 &&
+        caret_draw &&
+        rect_equal(caret_draw->rect, ui0_rect(489, 181, 1, 23)) &&
+        caret_draw->color == theme->colors[UI0ColorRole_Focus] &&
         count_draw_op_for_source(&frame, UI0DrawOp_ControlFill,
                                  editor ? editor->id : 0) == 1,
-        "note body is a UI0 TextArea with top-aligned caller-bound row text");
+        "note body restores proportional 18px system-UI text, 25px rows, "
+        "and the frozen 23px caret through explicit caller metadata");
 
   check(delete_note &&
         rect_equal(delete_note->rect, ui0_rect(317, 431, 74, 30)) &&
@@ -3674,12 +3754,335 @@ test_frozen_note_editor_composition(const UI0ResolvedTheme *theme)
                         theme, advances, &storage, &frame, frame_index++),
         "frozen Add Note composition builds");
   dialog = find_semantic_role(&frame, "Add Note", ReaderViewSemantic_Dialog);
+  editor = find_semantic_role(&frame, "Note text",
+                              ReaderViewSemantic_TextArea);
   cancel_note = find_semantic(&frame, "Cancel note");
   binding = cancel_note ? find_text_binding(&frame, cancel_note->id) : 0;
   check(dialog && rect_equal(dialog->rect, ui0_rect(303, 117, 520, 360)) &&
         find_semantic(&frame, "Delete note") == 0 &&
         cancel_note && binding && text_equal(binding->text, "Cancel"),
         "Add Note omits Delete and uses the frozen Cancel copy");
+  text_area = storage.text_area_records;
+  row_draw = editor ? find_draw_for_source(&frame, UI0DrawOp_Text,
+                                            editor->id) : 0;
+  binding = editor ? find_text_binding(&frame, editor->id) : 0;
+  check(editor && text_area->id == editor->id &&
+        (text_area->state & UI0TextAreaState_PlaceholderVisible) != 0 &&
+        rect_equal(text_area->placeholder_rect,
+                   ui0_rect(325, 174, 476, 234)) &&
+        row_draw && rect_equal(row_draw->rect,
+                               text_area->placeholder_rect) &&
+        row_draw->has_typography_role &&
+        row_draw->typography_role == UI0TypographyRole_Body &&
+        row_draw->typography_char_width == 10 &&
+        row_draw->typography_line_height == 18 &&
+        binding && binding->style == ReaderViewTextStyle_NoteEditor &&
+        text_equal(binding->text, "Type a note"),
+        "focused empty note preserves the frozen placeholder box and "
+        "explicit NoteEditor typography carrier");
+}
+
+static void
+test_note_metric_contract(const UI0ResolvedTheme *theme)
+{
+  static ReaderViewState state;
+  static ReaderViewFrameStorage storage;
+  ReaderViewSettingControl settings[READER_VIEW_SETTING_CAP];
+  ReaderViewChoice choices[8];
+  ReaderViewTocRow toc_rows[2];
+  ReaderViewFindRow find_rows[1];
+  ReaderViewRightRow right_rows[1];
+  ReaderViewCodepointAdvance find_advances[127];
+  ReaderViewCodepointAdvance note_advances[127];
+  ReaderViewCodepointAdvance over_cap[READER_VIEW_NOTE_CODEPOINT_ADVANCE_CAP + 1];
+  ReaderViewProjection projection = full_projection(
+    settings, choices, toc_rows, find_rows, right_rows);
+  ReaderViewLayoutInput layout_input;
+  ReaderViewLayout layout;
+  ReaderViewInput input;
+  ReaderViewBuildInput build_input;
+  ReaderViewFrame frame;
+  ReaderViewNoteTextMetrics valid_metrics;
+  const UI0TextAreaRecord *record;
+  const UI0DrawCommand *caret;
+  const ReaderViewSemanticNode *editor;
+  UI0S32 index;
+
+  memset(&layout_input, 0, sizeof(layout_input));
+  layout_input.bounds = ui0_rect(0, 0, 1400, 780);
+  layout_input.features = projection.features;
+  layout_input.document_flags = projection.document_flags;
+  memset(&input, 0, sizeof(input));
+  reader_view_state_reset_document(&state, projection.document_key);
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "note metric contract layout resolves");
+  memset(&build_input, 0, sizeof(build_input));
+  build_input.frame_index = 1021;
+  build_input.state = &state;
+  build_input.layout = &layout;
+  build_input.projection = &projection;
+  build_input.input = &input;
+  build_input.theme = theme;
+  build_input.find_text_metrics = test_find_text_metrics(find_advances);
+  check(reader_view_build(&build_input, &storage, &frame),
+        "closed note editor requires no note metric carrier");
+
+  projection.selection.status = ready_status();
+  projection.selection.selection_key = 7070;
+  projection.selection.revision = 31;
+  projection.selection.flags = ReaderViewSelection_Active |
+    ReaderViewSelection_CanEditNote;
+  projection.selection.note_text.data = "Metric note";
+  projection.selection.note_text.size = 11;
+  check(reader_view_open_note_editor(&state, &projection.selection),
+        "note metric validation editor opens");
+  build_input.frame_index += 1;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+        "open note editor fails closed without caller note metrics");
+
+  valid_metrics = test_note_text_metrics(note_advances);
+  build_input.note_text_metrics = valid_metrics;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "valid bounded note metrics build");
+  note_advances[1].codepoint = note_advances[0].codepoint;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+        "note metrics reject duplicate Unicode scalars");
+  note_advances[1].codepoint = 2;
+  note_advances[0].advance = -1;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+        "note metrics reject negative advances");
+  note_advances[0].advance = test_note_codepoint_advance(1);
+  note_advances[0].codepoint = 0xd800u;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+        "note metrics reject surrogate scalar values");
+  note_advances[0].codepoint = 1;
+
+  for (index = 0;
+       index < READER_VIEW_NOTE_CODEPOINT_ADVANCE_CAP + 1;
+       ++index)
+  {
+    over_cap[index].codepoint = (UI0U32)index + 1u;
+    over_cap[index].advance = 10;
+  }
+  build_input.note_text_metrics.advances = over_cap;
+  build_input.note_text_metrics.advance_count =
+    READER_VIEW_NOTE_CODEPOINT_ADVANCE_CAP + 1;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+        "note metric table rejects entries beyond its 256-scalar cap");
+  build_input.note_text_metrics = valid_metrics;
+  build_input.note_text_metrics.fallback_advance = 0;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+        "note metrics require a positive deterministic fallback");
+  build_input.note_text_metrics = valid_metrics;
+  build_input.note_text_metrics.pixel_height = 0;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+        "note metrics require a positive raster pixel height");
+  build_input.note_text_metrics = valid_metrics;
+  build_input.note_text_metrics.line_height = 17;
+  check(!reader_view_build(&build_input, &storage, &frame) &&
+        (frame.error_flags & ReaderViewFrameError_BadInput) != 0,
+        "note metrics reject a line height below pixel height");
+
+  check(reader_view_close_note_editor(&state),
+        "note metric validation editor closes");
+  projection.selection.selection_key = 7071;
+  projection.selection.revision = 32;
+  projection.selection.flags = ReaderViewSelection_Active |
+    ReaderViewSelection_CanAddNote;
+  projection.selection.note_text.data = 0;
+  projection.selection.note_text.size = 0;
+  check(reader_view_open_note_editor(&state, &projection.selection),
+        "fallback-refresh note editor opens");
+  memset(&build_input.note_text_metrics, 0,
+         sizeof(build_input.note_text_metrics));
+  build_input.note_text_metrics.fallback_advance = 10;
+  build_input.note_text_metrics.pixel_height = 18;
+  build_input.note_text_metrics.line_height = 25;
+  input.note_text.text = "\xc3\xa9";
+  input.note_text.text_len = 2;
+  build_input.frame_index = 1021;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "same-frame unlisted note scalar uses fallback metrics");
+  record = storage.text_area_records;
+  editor = find_semantic_role(&frame, "Note text",
+                              ReaderViewSemantic_TextArea);
+  caret = editor ? find_draw_for_source(&frame, UI0DrawOp_TextCaret,
+                                         editor->id) : 0;
+  check(state.note_draft_length == 2 &&
+        memcmp(state.note_draft, "\xc3\xa9", 2) == 0 && caret &&
+        caret->rect.x == record->text_rect.x + 10,
+        "unlisted incoming scalar keeps draft/focus and deterministic "
+        "fallback caret geometry");
+  memset(&input, 0, sizeof(input));
+  note_advances[0].codepoint = 0xe9u;
+  note_advances[0].advance = 14;
+  build_input.note_text_metrics.advances = note_advances;
+  build_input.note_text_metrics.advance_count = 1;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "next-frame refreshed scalar metric builds");
+  record = storage.text_area_records;
+  editor = find_semantic_role(&frame, "Note text",
+                              ReaderViewSemantic_TextArea);
+  caret = editor ? find_draw_for_source(&frame, UI0DrawOp_TextCaret,
+                                         editor->id) : 0;
+  check(state.note_draft_length == 2 && editor &&
+        state.focus_id == editor->id &&
+        caret && caret->rect.x == record->text_rect.x + 14,
+        "next-frame metric refresh updates exact caret without losing "
+        "draft or focus");
+}
+
+static void
+test_note_reference_rows_and_hits(const UI0ResolvedTheme *theme)
+{
+  static const char note_text[] =
+    "aaaaaaaaaa\naaaaaaaaaa\naaaaaaaaaa\naaaaaaaaaa\naaaaaaaaaa\n"
+    "aaaaaaaaaa\naaaaaaaaaa\naaaaaaaaaa\naaaaaaaaaa\naaaaaaaaaa";
+  static ReaderViewState state;
+  static ReaderViewFrameStorage storage;
+  ReaderViewSettingControl settings[READER_VIEW_SETTING_CAP];
+  ReaderViewChoice choices[8];
+  ReaderViewTocRow toc_rows[2];
+  ReaderViewFindRow find_rows[1];
+  ReaderViewRightRow right_rows[1];
+  ReaderViewCodepointAdvance advances[127];
+  ReaderViewProjection projection = full_projection(
+    settings, choices, toc_rows, find_rows, right_rows);
+  ReaderViewLayoutInput layout_input;
+  ReaderViewLayout layout;
+  ReaderViewInput input;
+  ReaderViewFrame frame;
+  UI0SignalRecord outside_signals[READER_VIEW_SIGNAL_CAP];
+  const UI0TextAreaRecord *record;
+  const UI0TextAreaRowRecord *first_row;
+  const UI0TextAreaRowRecord *last_row;
+  const UI0TextAreaSelectionRecord *first_selection;
+  const UI0TextAreaSelectionRecord *last_selection;
+  const UI0DrawCommand *caret;
+  const ReaderViewSemanticNode *editor;
+  UI0U64 frame_index = 961;
+  UI0S32 text_x;
+
+  memset(&layout_input, 0, sizeof(layout_input));
+  layout_input.bounds = ui0_rect(0, 0, 1400, 780);
+  memset(&input, 0, sizeof(input));
+  reader_view_state_reset_document(&state, projection.document_key);
+  projection.selection.status = ready_status();
+  projection.selection.selection_key = 6060;
+  projection.selection.revision = 21;
+  projection.selection.flags = ReaderViewSelection_Active |
+    ReaderViewSelection_CanEditNote;
+  projection.selection.note_text.data = note_text;
+  projection.selection.note_text.size = (UI0S32)strlen(note_text);
+  check(reader_view_open_note_editor(&state, &projection.selection) &&
+        lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "ten-row note reference frame builds");
+  record = storage.text_area_records;
+  first_row = storage.note_text_area_row_records + record->row_start;
+  last_row = first_row + record->row_count - 1;
+  text_x = record->text_rect.x;
+  editor = find_semantic_role(&frame, "Note text",
+                              ReaderViewSemantic_TextArea);
+  caret = editor ? find_draw_for_source(&frame, UI0DrawOp_TextCaret,
+                                         editor->id) : 0;
+  check(record->row_count == 9 && record->visible_row_count == 9 &&
+        record->scroll_y == 25 && state.note_input.scroll_y == 25 &&
+        first_row->byte_start == 11 && last_row->byte_start == 99 &&
+        rect_equal(first_row->rect, ui0_rect(text_x, 180, 60, 25)) &&
+        rect_equal(last_row->rect, ui0_rect(text_x, 380, 60, 25)) &&
+        caret && rect_equal(caret->rect,
+                            ui0_rect(text_x + 60, 381, 1, 23)),
+        "note adapter publishes exactly nine complete rows and the last-row "
+        "caret after line-quantized scrolling");
+
+  state.note_input.caret = 0;
+  state.note_input.selection_anchor = 0;
+  state.note_input.scroll_y = 0;
+  state.note_input.manual_scroll_anchor_valid = 0;
+  input.ui = ui0_input_pointer(text_x + 1, 181, 1, 1, 0);
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "note first visible row pointer press builds");
+  record = storage.text_area_records;
+  first_row = storage.note_text_area_row_records + record->row_start;
+  last_row = first_row + record->row_count - 1;
+  editor = find_semantic_role(&frame, "Note text",
+                              ReaderViewSemantic_TextArea);
+  caret = editor ? find_draw_for_source(&frame, UI0DrawOp_TextCaret,
+                                         editor->id) : 0;
+  check(record->row_count == 9 && record->scroll_y == 0 &&
+        first_row->byte_start == 0 && last_row->byte_start == 88 &&
+        state.note_input.caret == 0 && caret &&
+        rect_equal(caret->rect, ui0_rect(text_x, 181, 1, 23)) &&
+        record->text_rect.y - record->rect.y == 13 &&
+        record->rect.y + record->rect.h -
+          (record->text_rect.y + record->text_rect.h) == 7,
+        "first-row hit and caret preserve the frozen asymmetric +13/+7 "
+        "content clipping");
+  input.ui = ui0_input_pointer(text_x + 1, 181, 0, 0, 1);
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "note first-row pointer release builds");
+
+  input.ui = ui0_input_pointer(text_x + 1, 381, 1, 1, 0);
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "note last visible row pointer press builds");
+  record = storage.text_area_records;
+  editor = find_semantic_role(&frame, "Note text",
+                              ReaderViewSemantic_TextArea);
+  caret = editor ? find_draw_for_source(&frame, UI0DrawOp_TextCaret,
+                                         editor->id) : 0;
+  check(state.note_input.caret == 88 && record->scroll_y == 0 && caret &&
+        rect_equal(caret->rect, ui0_rect(text_x, 381, 1, 23)),
+        "last visible row hit maps to the ninth complete row and caret");
+  input.ui = ui0_input_pointer(text_x + 1, 381, 0, 0, 1);
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "note last-row pointer release builds");
+
+  memset(&input, 0, sizeof(input));
+  state.note_input.scroll_y = 0;
+  state.note_input.manual_scroll_anchor_valid = 0;
+  input.note_text.select_all = 1;
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "note nine-row selection frame builds");
+  record = storage.text_area_records;
+  first_selection = storage.note_text_area_selection_records +
+    record->selection_start_record;
+  last_selection = first_selection + record->selection_count - 1;
+  check(record->selection_count == 9 && record->scroll_y == 25 &&
+        rect_equal(first_selection->rect,
+                   ui0_rect(text_x, 181, 60, 23)) &&
+        rect_equal(last_selection->rect,
+                   ui0_rect(text_x, 381, 60, 23)),
+        "note selection adapter emits nine inset 23px selection records "
+        "without partial first or tenth rows");
+
+  memset(&input, 0, sizeof(input));
+  input.ui = ui0_input_pointer(100, 700, 0, 0, 0);
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++),
+        "outside-note signal baseline builds");
+  memcpy(outside_signals, storage.signal_records,
+         sizeof(outside_signals));
+  check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
+                        theme, advances, &storage, &frame, frame_index++) &&
+        input.ui.pointer_y == 700 &&
+        memcmp(outside_signals, storage.signal_records,
+               sizeof(outside_signals)) == 0,
+        "temporary note pointer mapping restores exactly and leaves every "
+        "signal outside the editor shell bit-identical");
 }
 
 static void
@@ -3751,7 +4154,7 @@ test_modal_feature_and_scroll_lifecycle(const UI0ResolvedTheme *theme)
   input.move_vertical_delta = -1;
   check(lifecycle_build(&state, &layout_input, &layout, &projection, &input,
                         theme, advances, &storage, &frame, frame_index++) &&
-        state.note_input.caret == 41,
+        state.note_input.caret == 53,
         "note vertical movement follows the real wrapped row once when host "
         "deltas mirror");
   memset(&input, 0, sizeof(input));
@@ -4862,6 +5265,7 @@ main(void)
   ReaderViewFindRow find_rows[1];
   ReaderViewRightRow right_rows[1];
   ReaderViewCodepointAdvance find_advances[127];
+  ReaderViewCodepointAdvance note_advances[127];
   const ReaderViewSemanticNode *node;
   const ReaderViewAction *action;
   UI0U64 first_hash;
@@ -4898,6 +5302,8 @@ main(void)
   test_focus_root_and_refresh_lifecycle(&theme);
   test_open_panel_focus_boundaries(&theme);
   test_frozen_note_editor_composition(&theme);
+  test_note_metric_contract(&theme);
+  test_note_reference_rows_and_hits(&theme);
   test_modal_feature_and_scroll_lifecycle(&theme);
 
   geometry_style = reader_view_default_content_geometry_style();
@@ -5012,6 +5418,7 @@ main(void)
   build_input.input = &frame_input;
   build_input.theme = &theme;
   build_input.find_text_metrics = test_find_text_metrics(find_advances);
+  build_input.note_text_metrics = test_note_text_metrics(note_advances);
   check(reader_view_build(&build_input, &storage, &frame),
         "minimal build");
   check(frame.error_flags == ReaderViewFrameError_None,

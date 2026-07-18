@@ -78,6 +78,15 @@ first-frame prefix geometry; beyond 256 distinct scalars, listed entries remain
 exact and unlisted entries use the caller-measured fallback. The boundary never
 grows or allocates.
 
+`ReaderViewNoteTextMetrics` follows the same borrowed, values-only one-build
+lifetime and 256-scalar cap, and is required only while the note editor is
+open. It additionally carries the concrete system-UI pixel height and layout
+line height. Hosts protect the current draft, same-frame incoming/transfer
+text, and localized placeholder; a missing scalar uses the caller fallback
+until the refreshed next-frame table arrives. Readerview0 publishes an
+explicit `ReaderViewTextStyle_NoteEditor` binding plus Body typography metadata
+on every note Text draw, so hosts need not retain the build input.
+
 `ReaderViewContentGeometryStyle` is copied for one geometry call. The returned
 `ReaderViewContentGeometry` is written into caller storage and contains values
 only; readerview0 retains neither the style nor any rectangle.
@@ -174,7 +183,9 @@ the record with a fixed byte width. The localized
 `Search in book` empty-field placeholder is not the localized
 `Type and press Enter` ready-status prompt. It remains visible beside the
 focused empty-field caret, which uses the frozen deterministic
-30-visible/30-hidden `ReaderViewBuildInput.frame_index` cycle. A selected result retains the
+20 px centered field geometry and 30-visible/30-hidden
+`ReaderViewBuildInput.frame_index` cycle. The text and selection rectangles
+remain 16 px high. A selected result retains the
 88 px action row but insets its painted fill by 4 px vertically. Ready Find
 status uses the frozen muted Body line. When a ready zero-row projection omits
 its explicit message, shared bounded query state selects the localized
@@ -201,7 +212,11 @@ The frozen row-menu target keeps the standard 30 by 28 control shell and a
 centered literal ellipsis; the 20 px star target alone is shell-free. A row
 paints `UI0ColorRole_SurfaceElevated` only while hovered or active. Idle,
 selected-only, and focus-only rows have no fill or border, while semantic
-selection/focus and the focus ring remain published. The Annotations title and
+selection/focus and the focus ring remain published. The shell-free star
+raster preblends against `SurfaceElevated` while unstarred and `Badge` while
+starred. An enabled filter trigger with open, focused, focus-visible, or active
+state uses the Focus border color; its separate clipped focus ring remains
+published. The Annotations title and
 20 px section heading, like the visible Find-input text, each have one exact
 shared text draw and binding. Hosts own translation of those records through
 their concrete system-UI renderer, so glyph-raster differences are host adapter
@@ -263,6 +278,16 @@ helper closes the modal, clears its dirty marker, retires note-editor-owned
 focus/hot/active and queued native requests, and restores the captured
 background focus. On persistence failure the host does not call the helper,
 so the editor and draft remain available for retry.
+
+The note TextArea keeps the frozen 492 by 248 shell while its content uses
+asymmetric 13 px top and 7 px bottom insets. A bounded synchronous adapter maps
+pointer rows to that same origin, quantizes vertical scroll to the caller's
+25 px line height, publishes at most nine complete rows, and insets caret and
+selection paint by one pixel to 23 px. Note rows carry proportional
+caller-supplied advances and explicit 18 px system-UI raster metadata; the
+focused empty placeholder uses its separate x+8/y+7 box. The adapter restores
+the copied pointer input before any other control is built and does not alter
+signals outside the editor shell.
 
 Page gutters keep their large host-independent action rectangles separate from
 the 44 by 88 painted targets. UI0's filled 18 by 32 PageCaretLeft/Right records

@@ -43,7 +43,8 @@ selection, clipped text, and blinking-caret draw records. Its localized
 `Search in book` placeholder is distinct from the localized
 `Type and press Enter` ready-status prompt and remains painted beside the
 caret while the focused field is empty. The caret follows the frozen
-frame-indexed 30-visible/30-hidden blink cycle. A host advertising Find also
+20 px centered field geometry and frame-indexed 30-visible/30-hidden blink
+cycle; its 16 px text/selection rectangle remains unchanged. A host advertising Find also
 supplies a bounded values-only codepoint-advance record from the same system-UI
 face it uses to paint the field. The shared input therefore uses real
 variable-width prefix geometry for drawing, caret placement, selection,
@@ -59,7 +60,10 @@ The right panel reproduces the accepted filter/export/close header, sectioned
 shell, and contained filter popup. An annotation row paints the resolved
 elevated-surface fill only while hovered or active; idle, selected-only, and
 focus-only rows remain fill-free while retaining semantic selection/focus and
-the focus ring. Its row-action popup is anchored to the exact row menu, flips
+the focus ring. An unstarred icon preblends against `SurfaceElevated`; a
+starred icon preblends against `Badge`. A focused/open filter trigger paints
+its border with the resolved Focus color as well as its clipped ring. Its
+row-action popup is anchored to the exact row menu, flips
 at the panel edge, and exposes the frozen Bookmark, Note, or Highlight action
 matrix. Every kind retains its inline star; only Highlight carries Star in the
 popup. The four filter labels are composed as bounded
@@ -91,6 +95,17 @@ After a host successfully persists a Save or Delete action, it calls
 focus/hot/active and queued accessibility state, clear the dirty marker, and
 restore the captured background focus. A failed host mutation does not call
 the helper, so the draft and editor remain available for retry.
+
+While the note editor is open, the host also supplies a borrowed, values-only
+`ReaderViewNoteTextMetrics` record: at most 256 unique Unicode advances, a
+positive fallback, the concrete system-UI pixel height, and its layout line
+height. The frozen field uses 18 px system-UI raster metadata in 25 px rows,
+13 px top and 7 px bottom content insets, nine complete visible rows, and
+23 px caret/selection rectangles. `ReaderViewTextStyle_NoteEditor` and the
+explicit Body/18 px draw carrier let each host rasterize from the published
+command without retaining build input. Same-frame unlisted text uses the
+caller fallback; a refreshed next-frame scalar table updates wrap, hit, and
+caret geometry without losing draft or focus.
 
 All projected prior-frame row keys and published popup-item identities are
 retained only in fixed-capacity caller-owned state. Each build reconciles
