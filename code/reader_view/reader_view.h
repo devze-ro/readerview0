@@ -128,6 +128,8 @@ typedef struct ReaderViewChoice
   ReaderViewText label;
   ReaderViewText detail;
   ReaderViewChoiceFlags flags;
+  /* Optional caller-resolved visual for color/swatch choices. */
+  UI0Color visual_color;
 } ReaderViewChoice;
 
 typedef enum ReaderViewChoicePresentation

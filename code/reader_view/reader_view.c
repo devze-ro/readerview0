@@ -51,6 +51,10 @@ enum
   RV_RIGHT_TEXT_STACK_GAP = 6,
   RV_RIGHT_TEXT_BASELINE_OFFSET = 4,
   RV_POPUP_WIDTH = 280,
+  RV_SELECTION_POPUP_WIDTH = 224,
+  RV_SELECTION_SWATCH_Y = 14,
+  RV_SELECTION_SWATCH_SIZE = 20,
+  RV_SELECTION_SWATCH_CAP = 4,
   RV_NOTE_WIDTH = 520,
   RV_NOTE_HEIGHT = 360,
   RV_NOTE_ANCHOR_GAP = 12,
@@ -108,6 +112,15 @@ typedef struct RVTextOverrideRecord
   UI0Color color;
 } RVTextOverrideRecord;
 
+typedef struct RVSelectionSwatchVisual
+{
+  UI0ID source_id;
+  UI0ControlKind source_kind;
+  UI0S32 source_index;
+  UI0Rect clip_rect;
+  UI0SwatchStripItem item;
+} RVSelectionSwatchVisual;
+
 typedef struct RVBuildContext
 {
   const ReaderViewBuildInput *input;
@@ -131,6 +144,8 @@ typedef struct RVBuildContext
   RVVisualFillRecord visual_fills[RV_VISUAL_FILL_CAP];
   UI0S32 text_override_count;
   RVTextOverrideRecord text_overrides[RV_TEXT_OVERRIDE_CAP];
+  UI0S32 selection_swatch_count;
+  RVSelectionSwatchVisual selection_swatches[RV_SELECTION_SWATCH_CAP];
   UI0ID toolbar_id;
   UI0ID left_panel_id;
   UI0ID right_panel_id;
@@ -3193,6 +3208,74 @@ rv_right_action_popup_row(const ReaderViewBuildInput *input,
   return rects.body_rect;
 }
 
+static UI0S32
+rv_selection_popup_action_count(const ReaderViewSelectionProjection *selection)
+{
+  UI0S32 result = 0;
+  if (!selection) return 0;
+  if ((selection->flags & (ReaderViewSelection_CanAddNote |
+                           ReaderViewSelection_CanEditNote)) != 0)
+    result += 1;
+  if ((selection->flags & ReaderViewSelection_CanCopy) != 0)
+    result += 1;
+  if ((selection->flags & ReaderViewSelection_CanDictionary) != 0)
+    result += 1;
+  if ((selection->flags & ReaderViewSelection_CanWebLookup) != 0)
+    result += 1;
+  if ((selection->flags & ReaderViewSelection_CanTranslate) != 0)
+    result += 1;
+  return result;
+}
+
+static UI0S32
+rv_selection_popup_height(const ReaderViewBuildInput *input)
+{
+  UI0MenuStyle style = ui0_menu_style_from_resolved(input->theme);
+  UI0S32 action_count = rv_selection_popup_action_count(
+    &input->projection->selection);
+  UI0S32 action_gap_count = rv_max(action_count - 1, 0);
+  UI0S32 action_start = RV_SELECTION_SWATCH_Y +
+                        RV_SELECTION_SWATCH_SIZE +
+                        style.popup_padding_y;
+  return action_start + action_count * style.row_height +
+         action_gap_count * style.row_gap + style.popup_padding_y;
+}
+
+static UI0Rect
+rv_selection_popup_action_row(const ReaderViewBuildInput *input,
+                              UI0Rect popup,
+                              UI0S32 row)
+{
+  UI0MenuStyle style = ui0_menu_style_from_resolved(input->theme);
+  UI0FlatRowPopupGeometry geometry;
+  UI0FlatRowPopupRowRects rects;
+  memset(&geometry, 0, sizeof(geometry));
+  geometry.padding_left = style.popup_padding_right;
+  geometry.padding_right = style.popup_padding_right;
+  geometry.padding_top = RV_SELECTION_SWATCH_Y +
+                         RV_SELECTION_SWATCH_SIZE +
+                         style.popup_padding_y;
+  geometry.padding_bottom = style.popup_padding_y;
+  geometry.row_height = style.row_height;
+  geometry.row_gap = style.row_gap;
+  geometry.indicator_width = UI0FlatRowIndicator_DefaultWidth;
+  geometry.indicator_gap = UI0FlatRowIndicator_DefaultGap;
+  rects = ui0_flat_row_popup_row_rects(popup, geometry, row);
+  return rects.body_rect;
+}
+
+static UI0Rect
+rv_selection_popup_swatch_rect(UI0Rect popup, UI0S32 index)
+{
+  static const UI0S32 offsets[RV_SELECTION_SWATCH_CAP] = {18, 66, 114, 162};
+  if (index < 0 || index >= RV_SELECTION_SWATCH_CAP)
+    return rv_rect(0, 0, 0, 0);
+  return rv_rect(popup.x + offsets[index],
+                 popup.y + RV_SELECTION_SWATCH_Y,
+                 RV_SELECTION_SWATCH_SIZE,
+                 RV_SELECTION_SWATCH_SIZE);
+}
+
 static UI0Rect
 rv_popup_rect(const ReaderViewBuildInput *input)
 {
@@ -3231,15 +3314,37 @@ rv_popup_rect(const ReaderViewBuildInput *input)
   else if (state->popup == ReaderViewPopup_SelectionTools)
   {
     UI0Rect anchor = input->projection->selection.anchor_rect;
-    result.w = rv_min(420, bounds.w - RV_INSET * 2);
-    result.h = 176;
+    UI0Rect viewport = input->layout->viewport_rect;
+    UI0Rect content = input->layout->content_rect;
+    UI0S32 min_x;
+    UI0S32 max_x;
+    UI0S32 min_y;
+    UI0S32 max_y;
+    UI0S32 below_y;
+    UI0S32 above_y;
+    if (viewport.w <= 0 || viewport.h <= 0) viewport = bounds;
+    if (content.w <= 0 || content.h <= 0) content = viewport;
+    result.w = rv_min(RV_SELECTION_POPUP_WIDTH,
+                      rv_max(viewport.w - RV_GAP * 2, 1));
+    result.h = rv_min(rv_selection_popup_height(input),
+                      rv_max(viewport.h - RV_GAP * 2, 1));
+    min_x = rv_max(viewport.x + RV_GAP, content.x - 12);
+    max_x = rv_min(viewport.x + viewport.w - result.w - RV_GAP,
+                   content.x + content.w - result.w + 12);
+    if (max_x < min_x) max_x = min_x;
     result.x = rv_clamp(anchor.x + anchor.w / 2 - result.w / 2,
-                        bounds.x + RV_INSET,
-                        bounds.x + bounds.w - result.w - RV_INSET);
-    result.y = anchor.y - result.h - RV_GAP;
-    if (result.y < bounds.y + RV_INSET)
-      result.y = rv_min(bounds.y + bounds.h - result.h - RV_INSET,
-                        anchor.y + anchor.h + RV_GAP);
+                        min_x, max_x);
+    min_y = viewport.y + RV_GAP;
+    max_y = viewport.y + viewport.h - result.h - RV_GAP;
+    if (max_y < min_y) max_y = min_y;
+    below_y = anchor.y + anchor.h + 10;
+    above_y = anchor.y - result.h - 10;
+    if (below_y <= max_y)
+      result.y = below_y;
+    else if (above_y >= min_y)
+      result.y = above_y;
+    else
+      result.y = rv_clamp(below_y, min_y, max_y);
   }
   return result;
 }
@@ -3670,94 +3775,174 @@ rv_build_selection_popup(RVBuildContext *ctx,
 {
   const ReaderViewSelectionProjection *selection =
     &ctx->input->projection->selection;
+  UI0SwatchStripBuildItem swatch_items[RV_SELECTION_SWATCH_CAP];
+  UI0SwatchStripFrame swatch_frame;
+  UI0SwatchStripStyle swatch_style;
+  UI0S32 swatch_control_indices[RV_SELECTION_SWATCH_CAP];
+  UI0S32 focused_swatch = -1;
+  UI0S32 swatch_count = rv_min(selection->highlight_colors.count,
+                               RV_SELECTION_SWATCH_CAP);
   UI0S32 item = 0;
   UI0S32 color_index;
-  UI0S32 columns = 4;
-  UI0S32 button_w = (popup.w - RV_GAP * 2) / columns;
+  memset(swatch_items, 0, sizeof(swatch_items));
+  memset(&swatch_frame, 0, sizeof(swatch_frame));
+  memset(&swatch_style, 0, sizeof(swatch_style));
+  memset(swatch_control_indices, 0, sizeof(swatch_control_indices));
+
+  for (color_index = 0; color_index < swatch_count; ++color_index)
+  {
+    const ReaderViewChoice *color =
+      selection->highlight_colors.items + color_index;
+    UI0ID id = rv_id(160, color->key);
+    UI0Color visual_color = color->visual_color;
+    UI0B32 selected = color->key == selection->current_color_key;
+    UI0B32 remove = selected &&
+      (selection->flags & ReaderViewSelection_CanRemoveHighlight) != 0;
+    if (visual_color == 0)
+    {
+      UI0B32 dark = ctx->input->theme->kind == UI0ThemeKind_Dark;
+      switch (color_index)
+      {
+        case 1:
+          visual_color = dark ? UI0_COLOR_RGB(0x47, 0x35, 0x5c) :
+                                UI0_COLOR_RGB(0xff, 0xd4, 0xec);
+          break;
+        case 2:
+          visual_color = dark ? UI0_COLOR_RGB(0x2a, 0x46, 0x62) :
+                                UI0_COLOR_RGB(0xcd, 0xe7, 0xff);
+          break;
+        case 3:
+          visual_color = dark ? UI0_COLOR_RGB(0x52, 0x3f, 0x1c) :
+                                UI0_COLOR_RGB(0xff, 0xdc, 0xa8);
+          break;
+        case 0:
+        default:
+          visual_color = dark ? UI0_COLOR_RGB(0x4d, 0x4a, 0x16) :
+                                UI0_COLOR_RGB(0xff, 0xf2, 0xa6);
+          break;
+      }
+    }
+    swatch_control_indices[color_index] = ctx->control_count;
+    if (rv_popup_button(ctx, 160, color->key,
+                        rv_selection_popup_swatch_rect(popup, color_index),
+                        color->label,
+                        (color->flags & ReaderViewChoice_Enabled) != 0,
+                        selected, 0))
+    {
+      (void)rv_add_action(ctx,
+                          remove ? ReaderViewAction_RemoveHighlight :
+                                   ReaderViewAction_SetHighlightColor,
+                          selection->selection_key, color->key,
+                          ReaderViewSetting_FontFamily,
+                          ReaderViewRightRow_Highlight,
+                          ReaderViewRightFilter_All, 0, rv_text(0, 0));
+    }
+    rv_set_control_visual_text(ctx, id, rv_text(0, 0));
+    swatch_items[color_index].rect =
+      rv_selection_popup_swatch_rect(popup, color_index);
+    swatch_items[color_index].color = visual_color;
+    swatch_items[color_index].selected = selected;
+    swatch_items[color_index].action_overlay_visible = remove;
+    if (ctx->signals.focus_id == id) focused_swatch = color_index;
+  }
+
+  swatch_style.border_default_color =
+    ctx->input->theme->colors[UI0ColorRole_SurfaceElevated];
+  swatch_style.border_hover_color =
+    ctx->input->theme->colors[UI0ColorRole_BorderMuted];
+  swatch_style.border_selected_color =
+    ctx->input->theme->colors[UI0ColorRole_TextSecondary];
+  swatch_style.border_active_color =
+    ctx->input->theme->colors[UI0ColorRole_Focus];
+  swatch_style.selected_indicator_color =
+    ctx->input->theme->colors[UI0ColorRole_Focus];
+  swatch_style.action_overlay_color =
+    ctx->input->theme->colors[UI0ColorRole_Focus];
+  swatch_style.focus_ring_color =
+    ctx->input->theme->colors[UI0ColorRole_Focus];
+  swatch_style.selected_indicator_inset_x = 5;
+  swatch_style.selected_indicator_bottom_offset = 6;
+  swatch_style.selected_indicator_height = 2;
+  swatch_style.focus_ring_outset = 2;
+  if (!ui0_swatch_strip_build(&(UI0SwatchStripBuildParams){
+        .items = swatch_items,
+        .item_count = (UI0U32)swatch_count,
+        .style = swatch_style,
+        .pointer_x = ctx->input->input->ui.pointer_x,
+        .pointer_y = ctx->input->input->ui.pointer_y,
+        .pointer_has_position = 1,
+        .pointer_down =
+          (ctx->input->input->ui.flags & UI0Input_PointerDown) != 0,
+        .pointer_pressed =
+          (ctx->input->input->ui.flags & UI0Input_PointerPressed) != 0,
+        .focus_active = focused_swatch >= 0,
+        .focus_visible = focused_swatch >= 0 &&
+          ctx->signals.focus_visible_id == ctx->signals.focus_id,
+        .focused_index = focused_swatch >= 0 ? focused_swatch : 0,
+      }, &swatch_frame))
+  {
+    ctx->frame->error_flags |= ReaderViewFrameError_BadInput;
+  }
+  else
+  {
+    for (color_index = 0;
+         color_index < (UI0S32)swatch_frame.item_count &&
+         ctx->selection_swatch_count < RV_SELECTION_SWATCH_CAP;
+         ++color_index)
+    {
+      UI0S32 control_index = swatch_control_indices[color_index];
+      RVSelectionSwatchVisual *visual =
+        ctx->selection_swatches + ctx->selection_swatch_count++;
+      const UI0ControlRecord *control =
+        ctx->storage->control_records + control_index;
+      visual->source_id = control->id;
+      visual->source_kind = control->kind;
+      visual->source_index = control->box_index;
+      visual->clip_rect = popup;
+      visual->item = swatch_frame.items[color_index];
+    }
+  }
+
+  if ((selection->flags & (ReaderViewSelection_CanAddNote |
+                           ReaderViewSelection_CanEditNote)) != 0 &&
+      rv_popup_button(ctx, 151, selection->selection_key,
+                      rv_selection_popup_action_row(ctx->input, popup, item++),
+                      (selection->flags & ReaderViewSelection_CanEditNote) != 0 ?
+                        labels.edit_note : labels.add_note_title,
+                      1, 0, 0))
+    rv_open_note_editor(ctx);
   if ((selection->flags & ReaderViewSelection_CanCopy) != 0 &&
       rv_popup_button(ctx, 150, selection->selection_key,
-                      rv_rect(popup.x + RV_GAP + (item % columns) * button_w,
-                              popup.y + RV_GAP + (item / columns) * 38,
-                              button_w - 2, RV_CONTROL_HEIGHT),
+                      rv_selection_popup_action_row(ctx->input, popup, item++),
                       labels.copy, 1, 0, 0))
     (void)rv_add_action(ctx, ReaderViewAction_CopySelection,
                         selection->selection_key, 0,
                         ReaderViewSetting_FontFamily, ReaderViewRightRow_Highlight,
                         ReaderViewRightFilter_All, 0, selection->selected_text);
-  item += 1;
-  if ((selection->flags & (ReaderViewSelection_CanAddNote |
-                           ReaderViewSelection_CanEditNote)) != 0 &&
-      rv_popup_button(ctx, 151, selection->selection_key,
-                      rv_rect(popup.x + RV_GAP + (item % columns) * button_w,
-                              popup.y + RV_GAP + (item / columns) * 38,
-                              button_w - 2, RV_CONTROL_HEIGHT),
-                      labels.edit_note, 1, 0, 0))
-    rv_open_note_editor(ctx);
-  item += 1;
   if ((selection->flags & ReaderViewSelection_CanDictionary) != 0 &&
       rv_popup_button(ctx, 152, selection->selection_key,
-                      rv_rect(popup.x + RV_GAP + (item % columns) * button_w,
-                              popup.y + RV_GAP + (item / columns) * 38,
-                              button_w - 2, RV_CONTROL_HEIGHT),
+                      rv_selection_popup_action_row(ctx->input, popup, item++),
                       labels.dictionary, 1, 0, 0))
     (void)rv_add_action(ctx, ReaderViewAction_DictionarySelection,
                         selection->selection_key, 0,
                         ReaderViewSetting_FontFamily, ReaderViewRightRow_Highlight,
                         ReaderViewRightFilter_All, 0, selection->selected_text);
-  item += 1;
   if ((selection->flags & ReaderViewSelection_CanWebLookup) != 0 &&
       rv_popup_button(ctx, 153, selection->selection_key,
-                      rv_rect(popup.x + RV_GAP + (item % columns) * button_w,
-                              popup.y + RV_GAP + (item / columns) * 38,
-                              button_w - 2, RV_CONTROL_HEIGHT),
+                      rv_selection_popup_action_row(ctx->input, popup, item++),
                       labels.web_lookup, 1, 0, 0))
     (void)rv_add_action(ctx, ReaderViewAction_WebLookupSelection,
                         selection->selection_key, 0,
                         ReaderViewSetting_FontFamily, ReaderViewRightRow_Highlight,
                         ReaderViewRightFilter_All, 0, selection->selected_text);
-  item += 1;
   if ((selection->flags & ReaderViewSelection_CanTranslate) != 0 &&
       rv_popup_button(ctx, 154, selection->selection_key,
-                      rv_rect(popup.x + RV_GAP + (item % columns) * button_w,
-                              popup.y + RV_GAP + (item / columns) * 38,
-                              button_w - 2, RV_CONTROL_HEIGHT),
+                      rv_selection_popup_action_row(ctx->input, popup, item++),
                       labels.translate, 1, 0, 0))
     (void)rv_add_action(ctx, ReaderViewAction_TranslateSelection,
                         selection->selection_key, 0,
                         ReaderViewSetting_FontFamily, ReaderViewRightRow_Highlight,
                         ReaderViewRightFilter_All, 0, selection->selected_text);
-  item += 1;
-  if ((selection->flags & ReaderViewSelection_CanRemoveHighlight) != 0 &&
-      rv_popup_button(ctx, 155, selection->selection_key,
-                      rv_rect(popup.x + RV_GAP + (item % columns) * button_w,
-                              popup.y + RV_GAP + (item / columns) * 38,
-                              button_w - 2, RV_CONTROL_HEIGHT),
-                      labels.delete_value, 1, 0, 1))
-    (void)rv_add_action(ctx, ReaderViewAction_RemoveHighlight,
-                        selection->selection_key, selection->current_color_key,
-                        ReaderViewSetting_FontFamily, ReaderViewRightRow_Highlight,
-                        ReaderViewRightFilter_All, 0, rv_text(0, 0));
-  item += 1;
-  for (color_index = 0;
-       color_index < selection->highlight_colors.count && color_index < 4;
-       ++color_index)
-  {
-    const ReaderViewChoice *color =
-      selection->highlight_colors.items + color_index;
-    if (rv_popup_button(ctx, 160, color->key,
-                        rv_rect(popup.x + RV_GAP + (item % columns) * button_w,
-                                popup.y + RV_GAP + (item / columns) * 38,
-                                button_w - 2, RV_CONTROL_HEIGHT),
-                        color->label,
-                        (color->flags & ReaderViewChoice_Enabled) != 0,
-                        color->key == selection->current_color_key, 0))
-      (void)rv_add_action(ctx, ReaderViewAction_SetHighlightColor,
-                          selection->selection_key, color->key,
-                          ReaderViewSetting_FontFamily,
-                          ReaderViewRightRow_Highlight,
-                          ReaderViewRightFilter_All, 0, rv_text(0, 0));
-    item += 1;
-  }
 }
 
 static UI0B32
@@ -5497,6 +5682,139 @@ rv_add_right_filter_focus_corner_seams(RVBuildContext *ctx)
   }
 }
 
+static const RVSelectionSwatchVisual *
+rv_selection_swatch_for_source(const RVBuildContext *ctx, UI0ID source_id)
+{
+  UI0S32 index;
+  if (!ctx || source_id == 0) return 0;
+  for (index = 0; index < ctx->selection_swatch_count; ++index)
+  {
+    const RVSelectionSwatchVisual *visual =
+      ctx->selection_swatches + index;
+    if (visual->source_id == source_id) return visual;
+  }
+  return 0;
+}
+
+static void
+rv_filter_selection_swatch_draws(RVBuildContext *ctx)
+{
+  UI0S32 read_index;
+  UI0S32 write_index = 0;
+  UI0S32 swatch_index;
+  if (!ctx || ctx->selection_swatch_count <= 0) return;
+  for (read_index = 0; read_index < ctx->draw.command_count; ++read_index)
+  {
+    UI0DrawCommand command = ctx->draw.commands[read_index];
+    const RVSelectionSwatchVisual *visual =
+      rv_selection_swatch_for_source(ctx, command.source_id);
+    if (!visual)
+    {
+      ctx->draw.commands[write_index++] = command;
+      continue;
+    }
+    (void)visual;
+  }
+  ctx->draw.command_count = write_index;
+
+  for (swatch_index = 0;
+       swatch_index < ctx->selection_swatch_count;
+       ++swatch_index)
+  {
+    const RVSelectionSwatchVisual *visual =
+      ctx->selection_swatches + swatch_index;
+    UI0DrawCommand command;
+    UI0DrawFlags state_flags = UI0DrawFlag_RadiusExplicit;
+    if (visual->item.hovered) state_flags |= UI0DrawFlag_Hovered;
+    if (visual->item.active) state_flags |= UI0DrawFlag_Active;
+    if (visual->item.selected) state_flags |= UI0DrawFlag_Selected;
+    if (visual->item.focused) state_flags |= UI0DrawFlag_Focused;
+    if (visual->item.focus_visible) state_flags |= UI0DrawFlag_FocusVisible;
+
+    memset(&command, 0, sizeof(command));
+    command.op = UI0DrawOp_ControlFill;
+    command.source_id = visual->source_id;
+    command.source_kind = visual->source_kind;
+    command.source_index = visual->source_index;
+    command.rect = visual->item.rect;
+    command.clip_rect = visual->clip_rect;
+    command.color = visual->item.color;
+    command.stroke_color = command.color;
+    command.flags = state_flags;
+    command.corner_radius = 2;
+    (void)ui0_draw_push_command(&ctx->draw, command);
+
+    memset(&command, 0, sizeof(command));
+    command.op = UI0DrawOp_ControlBorder;
+    command.source_id = visual->source_id;
+    command.source_kind = visual->source_kind;
+    command.source_index = visual->source_index;
+    command.rect = visual->item.rect;
+    command.clip_rect = visual->clip_rect;
+    command.color = visual->item.border_color;
+    command.stroke_color = command.color;
+    command.stroke_width = 1;
+    command.flags = state_flags;
+    command.corner_radius = 2;
+    (void)ui0_draw_push_command(&ctx->draw, command);
+
+    if (visual->item.selected &&
+        !visual->item.action_overlay_visible &&
+        visual->item.selected_indicator_rect.w > 0 &&
+        visual->item.selected_indicator_rect.h > 0)
+    {
+      memset(&command, 0, sizeof(command));
+      command.op = UI0DrawOp_ControlFill;
+      command.source_id = visual->source_id;
+      command.source_kind = visual->source_kind;
+      command.source_index = visual->source_index;
+      command.rect = visual->item.selected_indicator_rect;
+      command.clip_rect = visual->clip_rect;
+      command.color = visual->item.selected_indicator_color;
+      command.stroke_color = command.color;
+      command.flags = UI0DrawFlag_RadiusExplicit |
+                      UI0DrawFlag_Selected;
+      command.corner_radius = 0;
+      (void)ui0_draw_push_command(&ctx->draw, command);
+    }
+    if (visual->item.action_overlay_visible)
+    {
+      UI0Rect overlay = visual->item.action_overlay_rect;
+      UI0S32 icon_size = rv_min(12, rv_min(overlay.w, overlay.h));
+      memset(&command, 0, sizeof(command));
+      command.op = UI0DrawOp_Icon;
+      command.source_id = visual->source_id;
+      command.source_kind = visual->source_kind;
+      command.source_index = visual->source_index;
+      command.rect = rv_rect(overlay.x + (overlay.w - icon_size) / 2,
+                             overlay.y + (overlay.h - icon_size) / 2,
+                             icon_size, icon_size);
+      command.clip_rect = visual->clip_rect;
+      command.color = visual->item.action_overlay_color;
+      command.stroke_color = command.color;
+      command.icon_kind = UI0IconKind_Close;
+      command.flags = UI0DrawFlag_Selected;
+      (void)ui0_draw_push_command(&ctx->draw, command);
+    }
+    if (visual->item.focus_visible)
+    {
+      memset(&command, 0, sizeof(command));
+      command.op = UI0DrawOp_FocusRing;
+      command.source_id = visual->source_id;
+      command.source_kind = visual->source_kind;
+      command.source_index = visual->source_index;
+      command.rect = visual->item.focus_ring_rect;
+      command.clip_rect = visual->clip_rect;
+      command.color = visual->item.focus_ring_color;
+      command.stroke_color = command.color;
+      command.stroke_width = 1;
+      command.flags = state_flags;
+      command.corner_radius = 4;
+      (void)ui0_draw_push_command(&ctx->draw, command);
+    }
+  }
+}
+
 static void
 rv_filter_reference_chrome_draws(RVBuildContext *ctx)
 {
@@ -6335,21 +6653,9 @@ rv_popup_items(const ReaderViewBuildInput *input, UI0B32 focusable_only)
     {
       const ReaderViewSelectionProjection *selection = &projection->selection;
       ReaderViewSelectionFlags flags = selection->flags;
-      if ((flags & ReaderViewSelection_CanCopy) != 0)
-        rv_popup_item_append(&result, rv_id(150, selection->selection_key));
-      if ((flags & (ReaderViewSelection_CanAddNote |
-                    ReaderViewSelection_CanEditNote)) != 0)
-        rv_popup_item_append(&result, rv_id(151, selection->selection_key));
-      if ((flags & ReaderViewSelection_CanDictionary) != 0)
-        rv_popup_item_append(&result, rv_id(152, selection->selection_key));
-      if ((flags & ReaderViewSelection_CanWebLookup) != 0)
-        rv_popup_item_append(&result, rv_id(153, selection->selection_key));
-      if ((flags & ReaderViewSelection_CanTranslate) != 0)
-        rv_popup_item_append(&result, rv_id(154, selection->selection_key));
-      if ((flags & ReaderViewSelection_CanRemoveHighlight) != 0)
-        rv_popup_item_append(&result, rv_id(155, selection->selection_key));
       for (index = 0;
-           index < selection->highlight_colors.count && index < 4;
+           index < selection->highlight_colors.count &&
+           index < RV_SELECTION_SWATCH_CAP;
            ++index)
       {
         const ReaderViewChoice *color =
@@ -6358,6 +6664,17 @@ rv_popup_items(const ReaderViewBuildInput *input, UI0B32 focusable_only)
             (color->flags & ReaderViewChoice_Enabled) != 0)
           rv_popup_item_append(&result, rv_id(160, color->key));
       }
+      if ((flags & (ReaderViewSelection_CanAddNote |
+                    ReaderViewSelection_CanEditNote)) != 0)
+        rv_popup_item_append(&result, rv_id(151, selection->selection_key));
+      if ((flags & ReaderViewSelection_CanCopy) != 0)
+        rv_popup_item_append(&result, rv_id(150, selection->selection_key));
+      if ((flags & ReaderViewSelection_CanDictionary) != 0)
+        rv_popup_item_append(&result, rv_id(152, selection->selection_key));
+      if ((flags & ReaderViewSelection_CanWebLookup) != 0)
+        rv_popup_item_append(&result, rv_id(153, selection->selection_key));
+      if ((flags & ReaderViewSelection_CanTranslate) != 0)
+        rv_popup_item_append(&result, rv_id(154, selection->selection_key));
     } break;
 
     case ReaderViewPopup_NoteEditor:
@@ -6411,6 +6728,23 @@ rv_first_popup_focus_id(const ReaderViewBuildInput *input,
   {
     UI0ID selected = rv_id(135, (ReaderViewKey)state->right_filter);
     if (rv_popup_item_contains(focusable, selected)) return selected;
+  }
+  if (state->popup == ReaderViewPopup_SelectionTools)
+  {
+    const ReaderViewSelectionProjection *selection =
+      &input->projection->selection;
+    for (index = 0;
+         index < selection->highlight_colors.count &&
+         index < RV_SELECTION_SWATCH_CAP;
+         ++index)
+    {
+      const ReaderViewChoice *color =
+        selection->highlight_colors.items + index;
+      UI0ID id = rv_id(160, color->key);
+      if (color->key == selection->current_color_key &&
+          rv_popup_item_contains(focusable, id))
+        return id;
+    }
   }
   return focusable->ids[0];
 }
@@ -7726,6 +8060,7 @@ reader_view_build(const ReaderViewBuildInput *input,
                                icon->rect);
     }
   }
+  rv_filter_selection_swatch_draws(&ctx);
   {
     UI0S32 text_area_draw_start = ctx.draw.command_count;
     (void)ui0_text_area_draw_records(&ctx.draw, &ctx.text_areas);

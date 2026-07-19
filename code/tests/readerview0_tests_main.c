@@ -5718,6 +5718,310 @@ test_find_excerpt_visible_match_window(const UI0ResolvedTheme *theme)
         "Find excerpt window retains strict invalid-range rejection");
 }
 
+static void
+test_selection_popup_reference_recovery(const UI0ResolvedTheme *light_theme)
+{
+  static ReaderViewState state;
+  static ReaderViewFrameStorage storage;
+  ReaderViewProjection projection = minimal_projection();
+  ReaderViewChoice colors[4];
+  ReaderViewLayoutInput layout_input;
+  ReaderViewLayout layout;
+  ReaderViewInput frame_input;
+  ReaderViewBuildInput build_input;
+  ReaderViewFrame frame;
+  ReaderViewLabels labels = reader_view_default_english_labels();
+  const ReaderViewSemanticNode *popup;
+  const ReaderViewSemanticNode *yellow;
+  const ReaderViewSemanticNode *pink;
+  const ReaderViewSemanticNode *add_note;
+  const ReaderViewSemanticNode *copy;
+  const ReaderViewTextBinding *binding;
+  const ReaderViewAction *action;
+  const UI0DrawCommand *fill;
+  const UI0DrawCommand *icon;
+  UI0MenuStyle menu_style = ui0_menu_style_from_resolved(light_theme);
+  UI0FlatRowPopupGeometry row_geometry;
+  UI0FlatRowPopupRowRects expected_row;
+  UI0S32 expected_height;
+  UI0S32 index;
+
+  memset(colors, 0, sizeof(colors));
+  colors[0] = (ReaderViewChoice){
+    .key = 9000,
+    .label = {"Yellow", 6},
+    .flags = ReaderViewChoice_Enabled,
+    .visual_color = UI0_COLOR_RGB(0xff, 0xf2, 0xa6),
+  };
+  colors[1] = (ReaderViewChoice){
+    .key = 9001,
+    .label = {"Pink", 4},
+    .flags = ReaderViewChoice_Enabled,
+    .visual_color = UI0_COLOR_RGB(0xff, 0xd4, 0xec),
+  };
+  colors[2] = (ReaderViewChoice){
+    .key = 9002,
+    .label = {"Blue", 4},
+    .flags = ReaderViewChoice_Enabled,
+    .visual_color = UI0_COLOR_RGB(0xcd, 0xe7, 0xff),
+  };
+  colors[3] = (ReaderViewChoice){
+    .key = 9003,
+    .label = {"Orange", 6},
+    .flags = ReaderViewChoice_Enabled,
+    .visual_color = UI0_COLOR_RGB(0xff, 0xdc, 0xa8),
+  };
+
+  projection.features = ReaderViewFeature_SelectionTools;
+  projection.document_flags = ReaderViewDocument_Open;
+  projection.labels = labels;
+  projection.selection = (ReaderViewSelectionProjection){
+    .status = ready_status(),
+    .selection_key = 77,
+    .revision = 1,
+    .selected_text = {"Ganoes Stabro Paran", 19},
+    .flags = ReaderViewSelection_Active |
+             ReaderViewSelection_CanCopy |
+             ReaderViewSelection_CanHighlight |
+             ReaderViewSelection_CanAddNote |
+             ReaderViewSelection_CanDictionary |
+             ReaderViewSelection_CanWebLookup |
+             ReaderViewSelection_CanTranslate,
+    .highlight_colors = {colors, 4, ReaderViewChoicePresentation_Segments},
+  };
+  reader_view_state_reset_document(&state, projection.document_key);
+  memset(&layout_input, 0, sizeof(layout_input));
+  layout_input.bounds = ui0_rect(0, 0, 1120, 655);
+  layout_input.features = projection.features;
+  layout_input.document_flags = projection.document_flags;
+  check(reader_view_resolve_layout(&state, &layout_input, &layout),
+        "selection popup reference layout resolves");
+  projection.selection.anchor_rect =
+    ui0_rect(layout.content_rect.x + layout.content_rect.w / 2 - 40,
+             layout.content_rect.y + 120, 80, 24);
+  memset(&frame_input, 0, sizeof(frame_input));
+  memset(&build_input, 0, sizeof(build_input));
+  build_input.frame_index = 5000;
+  build_input.state = &state;
+  build_input.layout = &layout;
+  build_input.projection = &projection;
+  build_input.input = &frame_input;
+  build_input.theme = light_theme;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "selection popup reference frame builds");
+
+  popup = find_semantic_role(&frame, "More", ReaderViewSemantic_Group);
+  expected_height = 14 + 20 + menu_style.popup_padding_y +
+                    5 * menu_style.row_height +
+                    4 * menu_style.row_gap +
+                    menu_style.popup_padding_y;
+  check(popup != 0 && popup->rect.w == 224 &&
+        popup->rect.h == expected_height &&
+        popup->rect.x >= layout.viewport_rect.x + 8 &&
+        popup->rect.x + popup->rect.w <=
+          layout.viewport_rect.x + layout.viewport_rect.w - 8 &&
+        popup->rect.y >= layout.viewport_rect.y + 8 &&
+        popup->rect.y + popup->rect.h <=
+          layout.viewport_rect.y + layout.viewport_rect.h - 8,
+        "selection popup restores compact clamped reference surface");
+  yellow = find_semantic_role(&frame, "Yellow",
+                              ReaderViewSemantic_MenuItem);
+  pink = find_semantic_role(&frame, "Pink", ReaderViewSemantic_MenuItem);
+  check(popup != 0 && yellow != 0 && pink != 0 &&
+        rect_equal(yellow->rect,
+                   ui0_rect(popup->rect.x + 18, popup->rect.y + 14,
+                            20, 20)) &&
+        rect_equal(pink->rect,
+                   ui0_rect(popup->rect.x + 66, popup->rect.y + 14,
+                            20, 20)),
+        "selection popup restores the frozen four-swatch strip geometry");
+  binding = yellow ? find_text_binding(&frame, yellow->id) : 0;
+  fill = yellow ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                       yellow->id) : 0;
+  check(binding != 0 && binding->text.size == 0 && fill != 0 &&
+        fill->color == colors[0].visual_color &&
+        find_draw_for_source(&frame, UI0DrawOp_Text,
+                             yellow ? yellow->id : 0) == 0,
+        "selection swatches retain semantic names but paint resolved colors");
+
+  memset(&row_geometry, 0, sizeof(row_geometry));
+  row_geometry.padding_left = menu_style.popup_padding_right;
+  row_geometry.padding_right = menu_style.popup_padding_right;
+  row_geometry.padding_top = 14 + 20 + menu_style.popup_padding_y;
+  row_geometry.padding_bottom = menu_style.popup_padding_y;
+  row_geometry.row_height = menu_style.row_height;
+  row_geometry.row_gap = menu_style.row_gap;
+  row_geometry.indicator_width = UI0FlatRowIndicator_DefaultWidth;
+  row_geometry.indicator_gap = UI0FlatRowIndicator_DefaultGap;
+  expected_row = ui0_flat_row_popup_row_rects(popup->rect,
+                                               row_geometry, 0);
+  add_note = find_semantic_role(&frame, "Add Note",
+                                ReaderViewSemantic_MenuItem);
+  copy = find_semantic_role(&frame, "Copy", ReaderViewSemantic_MenuItem);
+  check(add_note != 0 && copy != 0 &&
+        rect_equal(add_note->rect, expected_row.body_rect) &&
+        copy->rect.y == add_note->rect.y + menu_style.row_height +
+                                             menu_style.row_gap &&
+        find_semantic_role(&frame, "Delete", ReaderViewSemantic_MenuItem) == 0,
+        "selection popup restores stacked actions without a delete row");
+
+  if (pink)
+  {
+    frame_input.ui = ui0_input_pointer(pink->rect.x + pink->rect.w / 2,
+                                       pink->rect.y + pink->rect.h / 2,
+                                       1, 1, 0);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "selection pink press builds");
+    frame_input.ui = ui0_input_pointer(pink->rect.x + pink->rect.w / 2,
+                                       pink->rect.y + pink->rect.h / 2,
+                                       0, 0, 1);
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "selection pink release builds");
+    action = find_action(&frame, ReaderViewAction_SetHighlightColor);
+    check(action != 0 && action->key == 77 &&
+          action->auxiliary_key == 9001,
+          "selection swatch mouse activation emits the bounded color action");
+  }
+
+  memset(&frame_input, 0, sizeof(frame_input));
+  projection.selection.current_color_key = 9001;
+  projection.selection.flags |= ReaderViewSelection_CanRemoveHighlight;
+  colors[1].flags |= ReaderViewChoice_Selected;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "selected highlight swatch frame builds");
+  pink = find_semantic_role(&frame, "Pink", ReaderViewSemantic_MenuItem);
+  icon = pink ? find_draw_for_source(&frame, UI0DrawOp_Icon, pink->id) : 0;
+  check(pink != 0 &&
+        (pink->flags & ReaderViewSemantic_Selected) != 0 &&
+        icon != 0 && icon->icon_kind == UI0IconKind_Close &&
+        icon->color == light_theme->colors[UI0ColorRole_Focus],
+        "active highlight swatch exposes its remove overlay");
+  if (pink)
+  {
+    check(reader_view_accessibility_invoke(&state, pink->id),
+          "selected swatch accessibility invoke queues");
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "selected swatch accessibility invoke builds");
+    action = find_action(&frame, ReaderViewAction_RemoveHighlight);
+    check(action != 0 && action->key == 77 &&
+          action->auxiliary_key == 9001,
+          "selected swatch activation removes the active highlight identity");
+  }
+
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "selection keyboard seed builds");
+  copy = find_semantic_role(&frame, "Copy", ReaderViewSemantic_MenuItem);
+  check(copy != 0 && reader_view_accessibility_focus(&state, copy->id),
+        "selection Copy queues keyboard focus");
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "selection Copy focus builds");
+  frame_input.ui.flags = UI0Input_ActivatePressed;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "selection Copy keyboard activation builds");
+  action = find_action(&frame, ReaderViewAction_CopySelection);
+  check(action != 0 && action->key == 77 &&
+        text_equal(action->text, "Ganoes Stabro Paran"),
+        "selection popup keyboard activation uses the shared action path");
+
+  memset(&frame_input, 0, sizeof(frame_input));
+  frame_input.escape_pressed = 1;
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame) &&
+        state.popup == ReaderViewPopup_None &&
+        state.dismissed_selection_key == 77,
+        "selection popup Escape dismisses once and records its selection key");
+
+  for (index = 0; index < 4; ++index)
+    colors[index].flags &= ~ReaderViewChoice_Selected;
+  projection.selection.current_color_key = 0;
+  projection.selection.flags &= ~ReaderViewSelection_CanRemoveHighlight;
+  projection.selection.selection_key = 78;
+  projection.selection.anchor_rect =
+    ui0_rect(layout.content_rect.x + 20, layout.viewport_rect.y + 2, 40, 18);
+  reader_view_state_reset_document(&state, projection.document_key);
+  memset(&frame_input, 0, sizeof(frame_input));
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "selection popup top-edge frame builds");
+  popup = find_semantic_role(&frame, "More", ReaderViewSemantic_Group);
+  check(popup != 0 && popup->rect.y ==
+          projection.selection.anchor_rect.y +
+          projection.selection.anchor_rect.h + 10 &&
+        popup->rect.y + popup->rect.h <=
+          layout.viewport_rect.y + layout.viewport_rect.h - 8,
+        "selection popup prefers the bounded below-anchor placement");
+
+  projection.selection.selection_key = 79;
+  projection.selection.anchor_rect =
+    ui0_rect(layout.content_rect.x + layout.content_rect.w - 60,
+             layout.viewport_rect.y + layout.viewport_rect.h - 20,
+             40, 18);
+  reader_view_state_reset_document(&state, projection.document_key);
+  build_input.frame_index += 1;
+  check(reader_view_build(&build_input, &storage, &frame),
+        "selection popup bottom-edge frame builds");
+  popup = find_semantic_role(&frame, "More", ReaderViewSemantic_Group);
+  check(popup != 0 && popup->rect.y + popup->rect.h + 10 ==
+          projection.selection.anchor_rect.y &&
+        popup->rect.x + popup->rect.w <=
+          layout.content_rect.x + layout.content_rect.w + 12,
+        "selection popup falls above and clamps to the page-content edge");
+
+  {
+    UI0TokenSet dark_tokens = ui0_default_tokens(UI0ThemeKind_Dark);
+    UI0ResolvedTheme dark_theme = ui0_resolve_tokens(&dark_tokens);
+    const UI0DrawCommand *border;
+    const UI0DrawCommand *focus;
+    colors[0].visual_color = UI0_COLOR_RGB(0x4d, 0x4a, 0x16);
+    colors[1].visual_color = UI0_COLOR_RGB(0x47, 0x35, 0x5c);
+    colors[2].visual_color = UI0_COLOR_RGB(0x2a, 0x46, 0x62);
+    colors[3].visual_color = UI0_COLOR_RGB(0x52, 0x3f, 0x1c);
+    projection.selection.selection_key = 80;
+    projection.selection.anchor_rect =
+      ui0_rect(layout.content_rect.x + layout.content_rect.w / 2 - 20,
+               layout.content_rect.y + 120, 40, 18);
+    reader_view_state_reset_document(&state, projection.document_key);
+    build_input.theme = &dark_theme;
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "selection popup dark-theme frame builds");
+    yellow = find_semantic_role(&frame, "Yellow",
+                                ReaderViewSemantic_MenuItem);
+    fill = yellow ? find_draw_for_source(&frame, UI0DrawOp_ControlFill,
+                                         yellow->id) : 0;
+    border = yellow ? find_draw_for_source(&frame, UI0DrawOp_ControlBorder,
+                                           yellow->id) : 0;
+    check(fill != 0 && border != 0 &&
+          fill->color == colors[0].visual_color &&
+          border->color ==
+            dark_theme.colors[UI0ColorRole_SurfaceElevated],
+          "selection swatches preserve host colors and dark-theme chrome");
+    check(yellow != 0 && reader_view_accessibility_focus(&state, yellow->id),
+          "selection swatch dark-theme focus queues");
+    build_input.frame_index += 1;
+    check(reader_view_build(&build_input, &storage, &frame),
+          "selection swatch dark-theme focus builds");
+    yellow = find_semantic_role(&frame, "Yellow",
+                                ReaderViewSemantic_MenuItem);
+    focus = yellow ? find_draw_for_source(&frame, UI0DrawOp_FocusRing,
+                                          yellow->id) : 0;
+    check(focus != 0 && yellow != 0 &&
+          focus->color == dark_theme.colors[UI0ColorRole_Focus] &&
+          focus->rect.w == yellow->rect.w + 4 &&
+          focus->rect.h == yellow->rect.h + 4,
+          "selection swatch keyboard focus is visible in the active theme");
+    build_input.theme = light_theme;
+  }
+}
+
 int
 main(void)
 {
@@ -5778,6 +6082,7 @@ main(void)
   test_note_reference_rows_and_hits(&theme);
   test_modal_feature_and_scroll_lifecycle(&theme);
   test_find_excerpt_visible_match_window(&theme);
+  test_selection_popup_reference_recovery(&theme);
 
   geometry_style = reader_view_default_content_geometry_style();
   memset(&geometry, 0, sizeof(geometry));
