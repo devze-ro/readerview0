@@ -5897,7 +5897,9 @@ test_selection_popup_reference_recovery(const UI0ResolvedTheme *light_theme)
   check(pink != 0 &&
         (pink->flags & ReaderViewSemantic_Selected) != 0 &&
         icon != 0 && icon->icon_kind == UI0IconKind_Close &&
-        icon->color == light_theme->colors[UI0ColorRole_Focus],
+        icon->color == light_theme->colors[UI0ColorRole_Focus] &&
+        icon->stroke_color == colors[1].visual_color &&
+        icon->stroke_color != icon->color,
         "active highlight swatch exposes its remove overlay");
   if (pink)
   {

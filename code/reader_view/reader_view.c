@@ -5791,7 +5791,10 @@ rv_filter_selection_swatch_draws(RVBuildContext *ctx)
                              icon_size, icon_size);
       command.clip_rect = visual->clip_rect;
       command.color = visual->item.action_overlay_color;
-      command.stroke_color = command.color;
+      /* Hosts rasterize icons against stroke_color.  Preserve the swatch as
+         the backdrop so Close remains an X instead of a solid focus-colored
+         square. */
+      command.stroke_color = visual->item.color;
       command.icon_kind = UI0IconKind_Close;
       command.flags = UI0DrawFlag_Selected;
       (void)ui0_draw_push_command(&ctx->draw, command);

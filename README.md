@@ -168,6 +168,6 @@ The package exact-pins UI0 API 91 at commit
 resolved theme catalog, shared portable reader icon identities, and exact
 filled PageCaret raster records. The source-consumed UI0 closure requires
 zero_foundation commit
-`eee57edc1b0c7af5bef7afca26f3c27a32fb6e7c`.
+`fa7f680f933c23d84f9b74e15887a3b8bb78d2f9` (`0.4.3-dev`).
 
 This recovery slice does not authorize a push.
