@@ -171,3 +171,12 @@ zero_foundation commit
 `fa7f680f933c23d84f9b74e15887a3b8bb78d2f9` (`0.4.3-dev`).
 
 This recovery slice does not authorize a push.
+
+## License
+
+Unless otherwise noted, first-party source code and documentation in this
+repository are licensed under the Mozilla Public License 2.0 (`MPL-2.0`). See
+[LICENSE](LICENSE).
+
+Source-consumed dependencies and third-party materials retain their respective
+licenses.
