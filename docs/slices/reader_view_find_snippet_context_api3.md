@@ -1,5 +1,9 @@
 # Reader View Find snippet context recovery: API 3
 
+> [!NOTE]
+> This is a historical engineering record. See the
+> [project README](../../README.md) for current information.
+
 Date: 2026-07-19
 
 Status: implemented and package-validated; exact Re10 and 8vo adoption and

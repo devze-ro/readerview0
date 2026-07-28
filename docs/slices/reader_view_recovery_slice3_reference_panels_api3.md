@@ -1,5 +1,9 @@
 # Reader View recovery Slice 3: reference panels API 3
 
+> [!NOTE]
+> This is a historical engineering record. See the
+> [project README](../../README.md) for current information.
+
 Date: 2026-07-17
 
 Status: implemented and locally validated; host adoption and decoded-pixel

@@ -1,5 +1,9 @@
 # Reader View Stage 2B-1: Content Geometry API 2
 
+> [!NOTE]
+> This is a historical engineering record. See the
+> [project README](../../README.md) for current information.
+
 Status: implemented
 
 Date: 2026-07-17

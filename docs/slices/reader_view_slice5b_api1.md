@@ -1,5 +1,9 @@
 # Reader View Slice 5B: API 1 implementation
 
+> [!NOTE]
+> This is a historical engineering record. See the
+> [project README](../../README.md) for current information.
+
 Date: 2026-07-16
 
 ## Scope
@@ -116,17 +120,18 @@ The architecture guard verifies the UI0-only dependency, unity inclusion,
 manifest closure, and absence of document-engine, host, allocation, platform,
 persistence, callback, vtable, event-bus, and DI dependencies.
 
-## Adoption sequence
+## Historical adoption sequence
 
-1. Commit API 1 locally in readerview0; keep the repository local-only.
-2. Source-consume the package in a fresh 8vo worktree.
-3. Project 8vo's reader0 API 3 state, implement host-owned persistence and
-   actions, and close current re10 feature gaps.
-4. Validate behavior, visuals, persistence, focus/accessibility, and timing.
-5. Fresh-fetch and explicitly reconcile re10 before any re10 adoption.
+1. API 1 was committed locally before repository publication.
+2. The package was source-consumed in a fresh 8vo worktree.
+3. 8vo's reader0 API 3 state was projected while host-owned persistence and
+   actions remained with the application.
+4. Behavior, visuals, persistence, focus/accessibility, and timing were
+   validated.
+5. Re10 reconciliation and adoption were handled separately.
 
-No readerview0 GitHub repository or re10 remote dependency is authorized by
-this slice.
+Repository publication and re10 remote adoption were outside this slice and
+occurred separately.
 
 API 1 is superseded for new consumers by the compatible-feature API 2 follow-up
 recorded in `reader_view_stage2b1_content_geometry_api2.md`. API 2 changes no

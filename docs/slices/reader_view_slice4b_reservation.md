@@ -1,5 +1,9 @@
 # Reader View Slice 4B repository reservation
 
+> [!NOTE]
+> This is a historical engineering record. See the
+> [project README](../../README.md) for current information.
+
 Date: 2026-07-15
 
 ## Decision
@@ -16,18 +20,18 @@ Find destination, history, or page-selection algorithms. Readerview0 can now be
 designed around actions and projections rather than becoming a second reader
 core.
 
-## Slice 4B deliverable
+## Historical Slice 4B deliverable
 
-- local repository on `main` with the approved commit identity;
-- dedicated linked `codex/reader-view-slice4b-reservation` worktree;
-- no remote and no GitHub repository;
-- boundary documentation only; and
-- no public API, source manifest, package dependency, build, or UI
-  implementation.
+- The repository existed locally on `main` with the approved commit identity.
+- Work continued in a dedicated linked
+  `codex/reader-view-slice4b-reservation` worktree.
+- No remote or GitHub repository existed at the time.
+- The slice delivered boundary documentation only, with no public API, source
+  manifest, package dependency, build, or UI implementation.
 
-## Next gate
+## Historical next gate
 
-The next slice must inventory the exact re10 and 8vo toolbar, TOC, Find,
-annotation-panel, theme, font, and bookmark inputs/actions. It must then propose
-the smallest coherent UI0-composed package API before source is moved or new
-chrome is built.
+The next planned slice was to inventory the exact re10 and 8vo toolbar, TOC,
+Find, annotation-panel, theme, font, and bookmark inputs/actions, then propose
+the smallest coherent UI0-composed package API before source moved or new
+chrome was built.

@@ -1,5 +1,9 @@
 # Reader View selection-menu recovery (API 3)
 
+> [!NOTE]
+> This is a historical engineering record. See the
+> [project README](../../README.md) for current information.
+
 Date: 2026-07-19
 
 ## Baseline and dependencies

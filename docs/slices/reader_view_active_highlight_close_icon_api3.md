@@ -1,5 +1,9 @@
 # ReaderView0 active highlight close icon (API 3)
 
+> [!NOTE]
+> This is a historical engineering record. See the
+> [project README](../../README.md) for current information.
+
 ## Problem
 
 The active highlight swatch publishes a portable `Close` icon. Its foreground

@@ -1,5 +1,9 @@
 # Reader View recovery Slice 1: zero-document interaction lifecycle
 
+> [!NOTE]
+> This is a historical engineering record. See the
+> [project README](../../README.md) for current information.
+
 Date: 2026-07-17
 
 Status: implemented and validated on local recovery branch
