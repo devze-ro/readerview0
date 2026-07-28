@@ -34,6 +34,7 @@ dependency guard, architecture audit, and package tests.
 
 ## Documentation
 
+- [Documentation index](docs/README.md)
 - [Architecture and ownership](docs/architecture.md)
 - [Historical engineering records](docs/slices/README.md)
 
