@@ -65,7 +65,7 @@ if (Test-Path -LiteralPath $Manifest) {
 }
 
 $Forbidden = @(
-  @{ Pattern = '\b(?:reader0|re10|lectern0|zero_foundation)\b'; Message = "forbidden repository dependency" },
+  @{ Pattern = '\b(?:reader0|re10|lectern0|ground0)\b'; Message = "forbidden repository dependency" },
   @{ Pattern = '#\s*include\s*[<\"](?:windows|windowsx|commctrl|d2d1|dwrite|wincodec|sqlite3)\.h'; Message = "forbidden platform or database include" },
   @{ Pattern = '\b(?:malloc|calloc|realloc|free|HeapAlloc|CreateWindow|sqlite3_)\s*\('; Message = "forbidden allocation/platform/persistence call" },
   @{ Pattern = '\b(?:callback|provider_table|vtable|event_bus|dependency_injection)\b'; Message = "forbidden indirection framework" }

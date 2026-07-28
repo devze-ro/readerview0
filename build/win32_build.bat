@@ -27,15 +27,20 @@ if errorlevel 1 (
 set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%..") do set "ROOT=%%~fI"
 if not defined READERVIEW0_UI0_DIR for %%I in ("%ROOT%\..\ui0") do set "READERVIEW0_UI0_DIR=%%~fI"
-if not defined READERVIEW0_ZERO_FOUNDATION_DIR if defined UI0_ZERO_FOUNDATION_DIR set "READERVIEW0_ZERO_FOUNDATION_DIR=%UI0_ZERO_FOUNDATION_DIR%"
-if not defined READERVIEW0_ZERO_FOUNDATION_DIR for %%I in ("%READERVIEW0_UI0_DIR%\..\zero_foundation") do set "READERVIEW0_ZERO_FOUNDATION_DIR=%%~fI"
+if not defined READERVIEW0_GROUND0_DIR if defined READERVIEW0_ZERO_FOUNDATION_DIR set "READERVIEW0_GROUND0_DIR=%READERVIEW0_ZERO_FOUNDATION_DIR%"
+if not defined READERVIEW0_GROUND0_DIR if defined UI0_GROUND0_DIR set "READERVIEW0_GROUND0_DIR=%UI0_GROUND0_DIR%"
+if not defined READERVIEW0_GROUND0_DIR if defined UI0_ZERO_FOUNDATION_DIR set "READERVIEW0_GROUND0_DIR=%UI0_ZERO_FOUNDATION_DIR%"
+if not defined READERVIEW0_GROUND0_DIR if defined GROUND0_DIR set "READERVIEW0_GROUND0_DIR=%GROUND0_DIR%"
+if not defined READERVIEW0_GROUND0_DIR if defined ZERO_FOUNDATION_DIR set "READERVIEW0_GROUND0_DIR=%ZERO_FOUNDATION_DIR%"
+if not defined READERVIEW0_GROUND0_DIR for %%I in ("%READERVIEW0_UI0_DIR%\..\ground0") do set "READERVIEW0_GROUND0_DIR=%%~fI"
+set "READERVIEW0_ZERO_FOUNDATION_DIR=%READERVIEW0_GROUND0_DIR%"
 
 if not exist "%READERVIEW0_UI0_DIR%\code\ui0.c" (
   echo [win32_build] Missing UI0 at "%READERVIEW0_UI0_DIR%".
   exit /b 1
 )
-if not exist "%READERVIEW0_ZERO_FOUNDATION_DIR%\code\base\base_unicode.c" (
-  echo [win32_build] Missing zero_foundation at "%READERVIEW0_ZERO_FOUNDATION_DIR%".
+if not exist "%READERVIEW0_GROUND0_DIR%\code\base\base_unicode.c" (
+  echo [win32_build] Missing ground0 at "%READERVIEW0_GROUND0_DIR%".
   exit /b 1
 )
 
@@ -50,11 +55,11 @@ pushd "%OUT_DIR%"
 cl /nologo /std:c11 /W4 /WX /Zi /FS /Od /MD /D_CRT_SECURE_NO_WARNINGS ^
   /I "%ROOT%\code" ^
   /I "%READERVIEW0_UI0_DIR%\code" ^
-  /I "%READERVIEW0_ZERO_FOUNDATION_DIR%\code" ^
+  /I "%READERVIEW0_GROUND0_DIR%\code" ^
   /Fe"readerview0_tests.exe" ^
-  "%READERVIEW0_ZERO_FOUNDATION_DIR%\code\base\base_unicode.c" ^
-  "%READERVIEW0_ZERO_FOUNDATION_DIR%\code\base\base_text_edit.c" ^
-  "%READERVIEW0_ZERO_FOUNDATION_DIR%\code\base\base_text_history.c" ^
+  "%READERVIEW0_GROUND0_DIR%\code\base\base_unicode.c" ^
+  "%READERVIEW0_GROUND0_DIR%\code\base\base_text_edit.c" ^
+  "%READERVIEW0_GROUND0_DIR%\code\base\base_text_history.c" ^
   "%READERVIEW0_UI0_DIR%\code\ui0.c" ^
   "%ROOT%\code\readerview0.c" ^
   "%ROOT%\code\tests\readerview0_tests_main.c"

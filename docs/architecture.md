@@ -43,16 +43,16 @@ application -> readerview0 API 3 -> UI0 API 91
 ```
 
 Readerview0 source-consumes no lower implementation. The final application
-compiles UI0 exactly once and compiles UI0's explicit zero_foundation base-text
+compiles UI0 exactly once and compiles UI0's explicit ground0 base-text
 source closure exactly once. Readerview0 exact-pins the compatible revisions in
 `vendor/ui0_dependency`.
 
 The source-closure revision is a consumer-build compatibility record, not a
 direct package dependency. It may advance when the same UI0 API and manifest
-compile unchanged against a newer compatible zero_foundation revision; such an
+compile unchanged against a newer compatible ground0 revision; such an
 advance requires the full strict package test and architecture audit.
 
-There is deliberately no reader0 or direct zero_foundation dependency.
+There is deliberately no reader0 or direct ground0 dependency.
 
 ## Lifetime and capacity
 

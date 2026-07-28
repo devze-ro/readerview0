@@ -8,12 +8,20 @@ if ($env:READERVIEW0_UI0_DIR) {
 } else {
   $Ui0 = Join-Path $Root "..\ui0"
 }
-if ($env:READERVIEW0_ZERO_FOUNDATION_DIR) {
+if ($env:READERVIEW0_GROUND0_DIR) {
+  $Foundation = $env:READERVIEW0_GROUND0_DIR
+} elseif ($env:READERVIEW0_ZERO_FOUNDATION_DIR) {
   $Foundation = $env:READERVIEW0_ZERO_FOUNDATION_DIR
+} elseif ($env:UI0_GROUND0_DIR) {
+  $Foundation = $env:UI0_GROUND0_DIR
 } elseif ($env:UI0_ZERO_FOUNDATION_DIR) {
   $Foundation = $env:UI0_ZERO_FOUNDATION_DIR
+} elseif ($env:GROUND0_DIR) {
+  $Foundation = $env:GROUND0_DIR
+} elseif ($env:ZERO_FOUNDATION_DIR) {
+  $Foundation = $env:ZERO_FOUNDATION_DIR
 } else {
-  $Foundation = Join-Path $Ui0 "..\zero_foundation"
+  $Foundation = Join-Path $Ui0 "..\ground0"
 }
 
 foreach ($path in @($Ui0, $Foundation, $Metadata)) {
@@ -25,8 +33,8 @@ foreach ($path in @($Ui0, $Foundation, $Metadata)) {
 $RequiredCommit = (Get-Content -Raw (Join-Path $Metadata "COMMIT")).Trim()
 $RequiredApi = (Get-Content -Raw (Join-Path $Metadata "API_VERSION")).Trim()
 $RequiredVersion = (Get-Content -Raw (Join-Path $Metadata "VERSION")).Trim()
-$RequiredFoundationCommit = (Get-Content -Raw (Join-Path $Metadata "SOURCE_CLOSURE_ZERO_FOUNDATION_COMMIT")).Trim()
-$RequiredFoundationVersion = (Get-Content -Raw (Join-Path $Metadata "SOURCE_CLOSURE_ZERO_FOUNDATION_VERSION")).Trim()
+$RequiredFoundationCommit = (Get-Content -Raw (Join-Path $Metadata "SOURCE_CLOSURE_GROUND0_COMMIT")).Trim()
+$RequiredFoundationVersion = (Get-Content -Raw (Join-Path $Metadata "SOURCE_CLOSURE_GROUND0_VERSION")).Trim()
 $CurrentCommit = (git -C $Ui0 rev-parse HEAD).Trim()
 $CurrentFoundationCommit = (git -C $Foundation rev-parse HEAD).Trim()
 $CurrentVersion = (Get-Content -Raw (Join-Path $Ui0 "VERSION")).Trim()
@@ -55,7 +63,7 @@ if ($ExitCode -eq 0) {
   exit 0
 }
 if ($DirtyUi0.Count -gt 0) { Write-Host "UI0 is dirty"; $DirtyUi0 | Select-Object -First 40 }
-if ($DirtyFoundation.Count -gt 0) { Write-Host "zero_foundation is dirty"; $DirtyFoundation | Select-Object -First 40 }
+if ($DirtyFoundation.Count -gt 0) { Write-Host "ground0 is dirty"; $DirtyFoundation | Select-Object -First 40 }
 Write-Host "readerview0 dependency status: stale, incompatible, or dirty"
 if ($FailWhenStale) { exit $ExitCode }
 exit 0

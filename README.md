@@ -159,7 +159,7 @@ Build and run the strict tests with:
 
 ```bat
 set READERVIEW0_UI0_DIR=C:\path\to\ui0
-set READERVIEW0_ZERO_FOUNDATION_DIR=C:\path\to\zero_foundation-at-the-pinned-ui0-closure
+set READERVIEW0_GROUND0_DIR=C:\path\to\ground0-at-the-pinned-ui0-closure
 build\win32_build.bat
 ```
 
@@ -167,7 +167,7 @@ The package exact-pins UI0 API 91 at commit
 `cadafcacdae8e63cf0d2b505f54e2a2a228c0bec`. That UI0 revision supplies the
 resolved theme catalog, shared portable reader icon identities, and exact
 filled PageCaret raster records. The source-consumed UI0 closure requires
-zero_foundation commit
+ground0 commit
 `fa7f680f933c23d84f9b74e15887a3b8bb78d2f9` (`0.4.3-dev`).
 
 This recovery slice does not authorize a push.
