@@ -7,7 +7,7 @@ Date: 2026-07-17
 ## Outcome
 
 Readerview0 advances from API 1 / `0.1.0-dev` to API 2 / `0.2.0-dev` and adds
-the smallest shared geometry mechanism required for re10/lectern0 visual
+the smallest shared geometry mechanism required for re10/8vo visual
 parity. Existing chrome composition, state, capacities, actions, focus,
 semantics, and responsive layout behavior are unchanged.
 
@@ -97,7 +97,7 @@ Strict C11 `/W4 /WX` tests cover:
 
 ## Deferred adoption
 
-This slice changes neither re10 nor lectern0. Lectern0 adopts UI0 API 90 and
+This slice changes neither re10 nor 8vo. 8vo adopts UI0 API 90 and
 readerview0 API 2 during Stage 2B-2 together with draw-adapter and projection
 conformance. Re10 adoption remains Stage 2B-4 after a new parallel-editor gate
 and explicit reconciliation. No readerview0 remote creation or push is

@@ -10,7 +10,7 @@ Status: implemented and validated on local recovery branch
 The accepted pre-extraction re10 reader at
 `a6b1555ecb39c4948c735decda02cdc5a71f452c` is the directional product
 reference. Cross-host equality is not sufficient evidence: extracted re10 must
-first preserve that reference, and lectern0 must then match the restored shared
+first preserve that reference, and 8vo must then match the restored shared
 contract.
 
 This bounded change fixes one confirmed interaction regression exposed by that
@@ -91,4 +91,4 @@ After the change, the full package build and test pass.
 - no attempt to declare reference parity restored;
 - no host persistence, document rendering, or native-window work;
 - no readerview0 API or package-version increment; and
-- no re10, lectern0, UI0, reader0, or zero_foundation source change.
+- no re10, 8vo, UI0, reader0, or zero_foundation source change.

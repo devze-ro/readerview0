@@ -1,7 +1,7 @@
 # readerview0
 
 `readerview0` is the reusable EPUB reader-view/chrome package in the dev0
-family. Its intended consumers are re10 and lectern0.
+family. Its intended consumers are re10 and 8vo.
 
 Reader View API 3 restores the accepted pre-extraction re10 Reader View
 foundation from explicit,
@@ -155,11 +155,31 @@ four current reading settings (font family, font size, line spacing, and
 theme), bookmark state, annotations/bookmarks, selection tools, full screen,
 distraction-free reading, lookup, translation, and export.
 
-Build and run the strict tests with:
+## Build
+
+Requirements:
+
+- Git and PowerShell 5.1 or later
+- Visual Studio 2022 Build Tools with the Desktop development with C++
+  workload and a Windows SDK
+
+Clone readerview0, UI0, and Ground0 beside one another, then check out the
+exact revisions in the dependency metadata:
+
+```powershell
+git clone https://github.com/devze-ro/readerview0.git
+git clone https://github.com/devze-ro/ui0.git
+git clone https://github.com/devze-ro/ground0.git
+$ui0Commit = Get-Content .\readerview0\vendor\ui0_dependency\COMMIT
+$ground0Commit = Get-Content .\readerview0\vendor\ui0_dependency\SOURCE_CLOSURE_GROUND0_COMMIT
+git -C .\ui0 checkout $ui0Commit.Trim()
+git -C .\ground0 checkout $ground0Commit.Trim()
+Set-Location .\readerview0
+```
+
+Build and run the strict dependency, architecture, and package tests:
 
 ```bat
-set READERVIEW0_UI0_DIR=C:\path\to\ui0
-set READERVIEW0_GROUND0_DIR=C:\path\to\ground0-at-the-pinned-ui0-closure
 build\win32_build.bat
 ```
 
@@ -169,8 +189,6 @@ resolved theme catalog, shared portable reader icon identities, and exact
 filled PageCaret raster records. The source-consumed UI0 closure requires
 ground0 commit
 `fa7f680f933c23d84f9b74e15887a3b8bb78d2f9` (`0.4.3-dev`).
-
-This recovery slice does not authorize a push.
 
 ## License
 

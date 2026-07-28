@@ -10,7 +10,7 @@ claiming the document engine owned by reader0.
 
 ## Why reservation follows API 3
 
-Re10 and lectern0 first reconcile on one concrete EPUB semantic-navigation
+Re10 and 8vo first reconcile on one concrete EPUB semantic-navigation
 contract. This prevents shared chrome from absorbing duplicate TOC fragment,
 Find destination, history, or page-selection algorithms. Readerview0 can now be
 designed around actions and projections rather than becoming a second reader
@@ -27,7 +27,7 @@ core.
 
 ## Next gate
 
-The next slice must inventory the exact re10 and lectern0 toolbar, TOC, Find,
+The next slice must inventory the exact re10 and 8vo toolbar, TOC, Find,
 annotation-panel, theme, font, and bookmark inputs/actions. It must then propose
 the smallest coherent UI0-composed package API before source is moved or new
 chrome is built.

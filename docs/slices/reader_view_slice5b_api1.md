@@ -5,7 +5,7 @@ Date: 2026-07-16
 ## Scope
 
 This slice implements the approved smallest coherent shared-chrome boundary
-needed to bring the current re10 EPUB reader feature set to lectern0. It does
+needed to bring the current re10 EPUB reader feature set to 8vo. It does
 not add features missing from re10; those belong to the later Kindle-gap phase
 after both applications converge and parity is stable.
 
@@ -119,8 +119,8 @@ persistence, callback, vtable, event-bus, and DI dependencies.
 ## Adoption sequence
 
 1. Commit API 1 locally in readerview0; keep the repository local-only.
-2. Source-consume the package in a fresh lectern0 worktree.
-3. Project lectern0's reader0 API 3 state, implement host-owned persistence and
+2. Source-consume the package in a fresh 8vo worktree.
+3. Project 8vo's reader0 API 3 state, implement host-owned persistence and
    actions, and close current re10 feature gaps.
 4. Validate behavior, visuals, persistence, focus/accessibility, and timing.
 5. Fresh-fetch and explicitly reconcile re10 before any re10 adoption.
@@ -157,7 +157,7 @@ geometry contracts require the normal API-revision process.
 
 ## Reconciled re10 source closure
 
-After lectern0 adoption, re10's parallel editor work advanced its exact
+After 8vo adoption, re10's parallel editor work advanced its exact
 zero_foundation snapshot to
 `eee57edc1b0c7af5bef7afca26f3c27a32fb6e7c` without changing UI0 API 89 or the
 readerview0 manifest. API 1 was rebuilt from scratch against that revision with

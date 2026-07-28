@@ -16,9 +16,8 @@ Date: 2026-07-19
 
 ## Real-book diagnosis
 
-The exact fixture was:
+The exact local fixture was:
 
-- `C:\Users\ankur\workspace\projects\devze-ro\gotm_new.epub`
 - size: `955125` bytes
 - SHA-256:
   `D5365766478A7D853821299B72432D15583F8DD10F94C2C2CF20D52E783E77F9`
@@ -32,8 +31,8 @@ justified body and italic publisher heading match the Re10 host, and the live
 Re10 reproduction matched its popup geometry and row ordering.
 
 The second supplied screenshot,
-`codex-clipboard-51b46916-e55a-41c5-a907-9616d0e44908.png`, is Lectern0. Its
-publisher-typography signature matches the live Lectern0 host. The menu is only
+`codex-clipboard-51b46916-e55a-41c5-a907-9616d0e44908.png`, is 8vo. Its
+publisher-typography signature matches the live 8vo host. The menu is only
 transient there because the pointer release that completes selection also
 dismisses the newly opened popup; that host lifecycle defect is intentionally
 outside this shared package slice.

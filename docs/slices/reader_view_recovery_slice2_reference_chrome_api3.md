@@ -8,7 +8,7 @@ Status: implemented and locally validated; host adoption is validated separately
 
 Readerview0 advances to API 3 / `0.3.0-dev` and restores the shared foundation
 needed to reproduce the accepted pre-extraction re10 Reader View. The reference
-direction is frozen re10 first, extracted re10 second, and lectern0 third. A
+direction is frozen re10 first, extracted re10 second, and 8vo third. A
 match between the two extracted hosts is not an acceptance result if it differs
 from the frozen re10 reference.
 

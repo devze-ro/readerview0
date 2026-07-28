@@ -3,7 +3,7 @@
 ## Problem
 
 The active highlight swatch publishes a portable `Close` icon. Its foreground
-and `stroke_color` were both the resolved Focus color. Re10 and Lectern0 use
+and `stroke_color` were both the resolved Focus color. Re10 and 8vo use
 `stroke_color` as the icon raster backdrop, so the identical colors collapsed
 the X into a solid square.
 

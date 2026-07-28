@@ -2,14 +2,12 @@
 
 Date: 2026-07-19
 
-Status: implemented and package-validated; exact Re10 and Lectern0 adoption and
+Status: implemented and package-validated; exact Re10 and 8vo adoption and
 rendered real-book acceptance are recorded by the host slices
 
 ## Reported failure and reference result
 
-The exact book is
-`C:\Users\ankur\workspace\projects\devze-ro\gotm_new.epub`, 955125 bytes,
-SHA-256
+The exact local book fixture is 955125 bytes, SHA-256
 `D5365766478A7D853821299B72432D15583F8DD10F94C2C2CF20D52E783E77F9`.
 Searching for `Paran` at 1400 by 780 in the Light theme produced a first result
 around Location 26 whose visible line ended at `IMPERIAL COMMAND Ganoes Stabro`.
@@ -67,7 +65,7 @@ The public Readerview0 API remains 3 and the package version remains
 - exact UI0 commit: `cadafcacdae8e63cf0d2b505f54e2a2a228c0bec`;
 - zero_foundation source closure:
   `eee57edc1b0c7af5bef7afca26f3c27a32fb6e7c`; and
-- no Reader0, Re10, Lectern0, or direct zero_foundation package dependency.
+- no Reader0, Re10, 8vo, or direct zero_foundation package dependency.
 
 ## Package regression coverage
 
@@ -86,7 +84,7 @@ Strict MSVC C11 `/W4 /WX` package validation covers:
 
 The exact UI0 dependency guard, zero_foundation source-closure guard,
 allocation/indirection/platform architecture audit, and complete Readerview0
-test executable pass. Rendered Re10/Lectern0 evidence and the frozen-reference
+test executable pass. Rendered Re10/8vo evidence and the frozen-reference
 and cross-host matrices remain host-adoption acceptance gates.
 
 ## Why earlier gates missed it

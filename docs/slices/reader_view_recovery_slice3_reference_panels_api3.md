@@ -9,7 +9,7 @@ acceptance are validated separately
 
 This slice restores the shared TOC, Find, and Annotations panel composition and
 interaction contract from the accepted pre-extraction re10 Reader View. The
-direction remains frozen re10 first, extracted re10 second, and lectern0 third.
+direction remains frozen re10 first, extracted re10 second, and 8vo third.
 Two extracted hosts matching each other is not an acceptance result when they
 both differ from the frozen reference.
 
@@ -521,7 +521,7 @@ Strict MSVC C11 `/W4 /WX` validation covers:
 Package tests establish portable layout, draw, semantic, focus, and action
 contracts. They do not establish either host's EPUB navigation execution,
 persistent record mutation, native accessibility behavior, or decoded-pixel
-result. Those acceptance gates belong to the re10 and lectern0 adoption slices
+result. Those acceptance gates belong to the re10 and 8vo adoption slices
 and the frozen-reference comparison.
 
 ## Deferred work

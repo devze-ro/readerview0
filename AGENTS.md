@@ -7,7 +7,7 @@
 - Keep persistence, annotations, decoded-image caches, native windows,
   accessibility adapters, commands, capture, and product integration in each
   application host.
-- Build concrete shared UI only after comparing the real re10 and lectern0
+- Build concrete shared UI only after comparing the real re10 and 8vo
   consumers. Do not invent provider tables, vtables, event buses, dependency
   injection frameworks, generic document interfaces, or process-global mutable
   state.
@@ -15,5 +15,7 @@
   must not depend on readerview0.
 - Preserve caller-owned state, frame, layout, theme-input, and storage
   lifetimes in any future API.
-- Slice 4B reserves the repository and architecture boundary only. Do not add
-  a public API or implementation without an approved follow-up slice.
+- Preserve Reader View API 3 compatibility unless a deliberate API revision,
+  metadata update, and consumer audit are part of the same change.
+- Run the strict dependency guard, architecture audit, and package tests for
+  every source or public-contract change.
